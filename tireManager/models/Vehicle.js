@@ -1,5 +1,47 @@
 const db = require('../config/database');
 
+const wheelConfigPositions = {
+  "4x2": [
+    { position_code: "F1", position_name: "Front Left", axle_number: 1 },
+    { position_code: "F2", position_name: "Front Right", axle_number: 1 },
+    { position_code: "R1", position_name: "Rear Left", axle_number: 2 },
+    { position_code: "R2", position_name: "Rear Right", axle_number: 2 },
+  ],
+  "6x4": [
+    { position_code: "F1", position_name: "Front Left", axle_number: 1 },
+    { position_code: "F2", position_name: "Front Right", axle_number: 1 },
+    { position_code: "R1", position_name: "Rear Left Inner", axle_number: 2 },
+    { position_code: "R2", position_name: "Rear Left Outer", axle_number: 2 },
+    { position_code: "R3", position_name: "Rear Right Inner", axle_number: 3 },
+    { position_code: "R4", position_name: "Rear Right Outer", axle_number: 3 },
+  ],
+  "8x4": [
+    { position_code: "F1", position_name: "Front Left", axle_number: 1 },
+    { position_code: "F2", position_name: "Front Right", axle_number: 1 },
+    { position_code: "R1", position_name: "Rear Left Inner", axle_number: 2 },
+    { position_code: "R2", position_name: "Rear Left Outer", axle_number: 2 },
+    { position_code: "R3", position_name: "Rear Right Inner", axle_number: 3 },
+    { position_code: "R4", position_name: "Rear Right Outer", axle_number: 3 },
+    { position_code: "R5", position_name: "Rear Left Extra", axle_number: 4 },
+    { position_code: "R6", position_name: "Rear Right Extra", axle_number: 4 },
+  ],
+  "6x2": [
+    { position_code: "F1", position_name: "Front Left", axle_number: 1 },
+    { position_code: "F2", position_name: "Front Right", axle_number: 1 },
+    { position_code: "R1", position_name: "Rear Left", axle_number: 2 },
+    { position_code: "R2", position_name: "Rear Right", axle_number: 2 },
+    { position_code: "R3", position_name: "Rear Center Left", axle_number: 3 },
+    { position_code: "R4", position_name: "Rear Center Right", axle_number: 3 },
+  ],
+  "4x4": [
+    { position_code: "F1", position_name: "Front Left", axle_number: 1 },
+    { position_code: "F2", position_name: "Front Right", axle_number: 1 },
+    { position_code: "R1", position_name: "Rear Left", axle_number: 2 },
+    { position_code: "R2", position_name: "Rear Right", axle_number: 2 },
+  ],
+};
+
+
 class Vehicle {
     static async create(vehicleData) {
         const {
@@ -16,7 +58,7 @@ class Vehicle {
                     (vehicle_number, make, model, year, wheel_config, current_odometer, status) 
                     VALUES (?, ?, ?, ?, ?, ?, ?)`;
 
-        return new Promise((resolve, reject) => {
+        const vehicleId = await new Promise((resolve, reject) => {
             db.run(sql, [
                 vehicle_number, make, model, year, wheel_config, current_odometer, status
             ], function(err) {
@@ -24,7 +66,17 @@ class Vehicle {
                 else resolve(this.lastID);
             });
         });
+
+        // Generate wheel positions based on configuration
+        const positions = wheelConfigPositions[wheel_config] || [];
+        if (positions.length > 0) {
+            await Vehicle.addWheelPositions(vehicleId, positions);
+        }
+
+        const vehicle = await Vehicle.getVehicleWithPositions(vehicleId);
+        return vehicle;
     }
+
 
     static async addWheelPositions(vehicleId, positions) {
         const sql = `INSERT INTO wheel_positions 
@@ -49,29 +101,60 @@ class Vehicle {
         return Promise.all(promises);
     }
 
-    static async getVehicleWithPositions(vehicleId) {
-        const vehicleSql = `SELECT * FROM vehicles WHERE id = ?`;
-        const positionsSql = `SELECT * FROM wheel_positions WHERE vehicle_id = ? ORDER BY axle_number, position_code`;
+    // static async getVehicleWithPositions(vehicleId) {
+    //     const vehicleSql = `SELECT * FROM vehicles WHERE id = ?`;
+    //     const positionsSql = `SELECT * FROM wheel_positions WHERE vehicle_id = ? ORDER BY axle_number, position_code`;
         
-        return new Promise((resolve, reject) => {
-            db.get(vehicleSql, [vehicleId], (err, vehicle) => {
+    //     return new Promise((resolve, reject) => {
+    //         db.get(vehicleSql, [vehicleId], (err, vehicle) => {
+    //             if (err) {
+    //                 reject(err);
+    //                 return;
+    //             }
+                
+    //             db.all(positionsSql, [vehicleId], (err, positions) => {
+    //                 if (err) {
+    //                     reject(err);
+    //                     return;
+    //                 }
+                    
+    //                 vehicle.positions = positions;
+    //                 resolve(vehicle);
+    //             });
+    //         });
+    //     });
+    // }
+
+    static async getVehicleWithPositions(vehicleId) {
+    const vehicleSql = `SELECT * FROM vehicles WHERE id = ?`;
+    const positionsSql = `SELECT * FROM wheel_positions WHERE vehicle_id = ? ORDER BY axle_number, position_code`;
+    
+    return new Promise((resolve, reject) => {
+        db.get(vehicleSql, [vehicleId], (err, vehicle) => {
+            if (err) {
+                reject(err);
+                return;
+            }
+
+            if (!vehicle) {
+                // Vehicle not found
+                resolve(null);
+                return;
+            }
+            
+            db.all(positionsSql, [vehicleId], (err, positions) => {
                 if (err) {
                     reject(err);
                     return;
                 }
                 
-                db.all(positionsSql, [vehicleId], (err, positions) => {
-                    if (err) {
-                        reject(err);
-                        return;
-                    }
-                    
-                    vehicle.positions = positions;
-                    resolve(vehicle);
-                });
+                vehicle.positions = positions;
+                resolve(vehicle);
             });
         });
-    }
+    });
+}
+
 
     static async getCurrentTires(vehicleId) {
         const sql = `

@@ -90,6 +90,61 @@ router.get('/:id', async (req, res) => {
     }
 });
 
+// Update vehicle details
+router.put('/:id', async (req, res) => {
+    try {
+        const {
+            vehicle_number,
+            make,
+            model,
+            wheel_config,
+            status
+        } = req.body;
+
+        const db = require('../config/database');
+
+        await new Promise((resolve, reject) => {
+            db.run(
+                `
+                UPDATE vehicles
+                SET 
+                    vehicle_number = ?,
+                    make = ?,
+                    model = ?,
+                    wheel_config = ?,
+                    status = ?
+                WHERE id = ?
+                `,
+                [
+                    vehicle_number,
+                    make,
+                    model,
+                    wheel_config,
+                    status,
+                    req.params.id
+                ],
+                function (err) {
+                    if (err) reject(err);
+                    else resolve(this.changes);
+                }
+            );
+        });
+
+        // Return updated vehicle
+        const updatedVehicle = await Vehicle.getVehicleWithPositions(req.params.id);
+
+        if (!updatedVehicle) {
+            return res.status(404).json({ error: 'Vehicle not found' });
+        }
+
+        res.json(updatedVehicle);
+    } catch (error) {
+        console.error('Error updating vehicle:', error);
+        res.status(500).json({ error: 'Failed to update vehicle' });
+    }
+});
+
+
 // Update vehicle odometer
 router.patch('/:id/odometer', async (req, res) => {
     try {
