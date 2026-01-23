@@ -9,6 +9,7 @@ const vehicleRoutes = require('./routes/vehicles');
 const inventoryRoutes = require('./routes/inventory');
 const supplierRoutes = require('./routes/suppliers');
 const movementRoutes = require('./routes/movements');
+const authRoutes = require('./routes/auth');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -20,6 +21,7 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // Routes
+app.use('/api/auth', authRoutes);
 app.use('/api/tires', tireRoutes);
 app.use('/api/vehicles', vehicleRoutes);
 app.use('/api/inventory', inventoryRoutes);

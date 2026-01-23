@@ -167,6 +167,116 @@ function initializeTables() {
         "CREATE INDEX IF NOT EXISTS idx_supplier_ledger ON supplier_ledger(supplier_id, date)"
     ];
 
+        // 9. Users Table
+    db.run(`CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT UNIQUE NOT NULL,
+        email TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        full_name TEXT NOT NULL,
+        role_id INTEGER,
+        department TEXT,
+        is_active BOOLEAN DEFAULT 1,
+        last_login TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE SET NULL
+    )`, (err) => {
+        if (err) console.error('Error creating users table:', err);
+        else console.log('Users table created/verified');
+    });
+
+    // 10. Roles Table
+    db.run(`CREATE TABLE IF NOT EXISTS roles (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT UNIQUE NOT NULL,
+        description TEXT,
+        is_system_role BOOLEAN DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )`, (err) => {
+        if (err) console.error('Error creating roles table:', err);
+        else console.log('Roles table created/verified');
+    });
+
+    // 11. Permissions Table
+    db.run(`CREATE TABLE IF NOT EXISTS permissions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        category TEXT NOT NULL,
+        code TEXT UNIQUE NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )`, (err) => {
+        if (err) console.error('Error creating permissions table:', err);
+        else console.log('Permissions table created/verified');
+    });
+
+    // 12. Role Permissions Junction Table
+    db.run(`CREATE TABLE IF NOT EXISTS role_permissions (
+        role_id INTEGER NOT NULL,
+        permission_id INTEGER NOT NULL,
+        can_view BOOLEAN DEFAULT 0,
+        can_create BOOLEAN DEFAULT 0,
+        can_edit BOOLEAN DEFAULT 0,
+        can_delete BOOLEAN DEFAULT 0,
+        can_approve BOOLEAN DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (role_id, permission_id),
+        FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE CASCADE,
+        FOREIGN KEY (permission_id) REFERENCES permissions(id) ON DELETE CASCADE
+    )`, (err) => {
+        if (err) console.error('Error creating role_permissions table:', err);
+        else console.log('Role permissions table created/verified');
+    });
+
+    // 13. User Sessions Table
+    db.run(`CREATE TABLE IF NOT EXISTS user_sessions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        session_token TEXT UNIQUE NOT NULL,
+        device_info TEXT,
+        ip_address TEXT,
+        expires_at TIMESTAMP NOT NULL,
+        is_active BOOLEAN DEFAULT 1,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )`, (err) => {
+        if (err) console.error('Error creating user_sessions table:', err);
+        else console.log('User sessions table created/verified');
+    });
+
+    // 14. Audit Log Table
+    db.run(`CREATE TABLE IF NOT EXISTS audit_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        action TEXT NOT NULL,
+        entity_type TEXT NOT NULL,
+        entity_id INTEGER,
+        old_values TEXT,
+        new_values TEXT,
+        ip_address TEXT,
+        user_agent TEXT,
+        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+    )`, (err) => {
+        if (err) console.error('Error creating audit_log table:', err);
+        else console.log('Audit log table created/verified');
+    });
+
+    // 15. Password Reset Tokens
+    db.run(`CREATE TABLE IF NOT EXISTS password_resets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        token TEXT UNIQUE NOT NULL,
+        expires_at TIMESTAMP NOT NULL,
+        is_used BOOLEAN DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )`, (err) => {
+        if (err) console.error('Error creating password_resets table:', err);
+        else console.log('Password reset table created/verified');
+    });
+
     indexes.forEach((sql, index) => {
         db.run(sql, (err) => {
             if (err) console.error(`Error creating index ${index + 1}:`, err);
