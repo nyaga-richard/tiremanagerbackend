@@ -2,6 +2,10 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const morgan = require('morgan');
+const cookieParser = require("cookie-parser");
+
+
+
 
 // Import routes
 const tireRoutes = require('./routes/tires');
@@ -9,17 +13,27 @@ const vehicleRoutes = require('./routes/vehicles');
 const inventoryRoutes = require('./routes/inventory');
 const supplierRoutes = require('./routes/suppliers');
 const movementRoutes = require('./routes/movements');
+const authRoutes = require('./routes/auth');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+app.use(cookieParser());
 
 // Middleware
-app.use(cors());
+app.use(
+  cors({
+    origin: "http://localhost:3000", 
+    credentials: true,               
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  })
+);
 app.use(morgan('dev'));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // Routes
+app.use('/api/auth', authRoutes);
 app.use('/api/tires', tireRoutes);
 app.use('/api/vehicles', vehicleRoutes);
 app.use('/api/inventory', inventoryRoutes);
@@ -41,6 +55,9 @@ app.use((err, req, res, next) => {
     console.error('Server error:', err);
     res.status(500).json({ error: 'Internal server error' });
 });
+
+app.options("*", cors());
+
 
 app.listen(PORT, () => {
     console.log(`Tire Management System running on port ${PORT}`);
