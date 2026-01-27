@@ -73,29 +73,53 @@ class TireController {
     // 2. Install tire on vehicle
     static async installOnVehicle(req, res) {
         try {
-            const { tire_id, vehicle_id, position_id, install_date, install_odometer, user_id, reason } = req.body;
+            const {
+                tire_id,
+                vehicle_id,
+                position_code,   // 👈 expect R3 from frontend
+                install_date,
+                install_odometer,
+                user_id,
+                reason
+            } = req.body;
 
-            // Check tire availability
+            const db = require('../config/database');
+
+            // 1️⃣ Validate tire
             const tire = await Tire.findById(tire_id);
             if (!tire || tire.status !== 'IN_STORE') {
                 return res.status(400).json({ error: 'Tire not available for installation' });
             }
 
-            // Create assignment
+            // 2️⃣ Resolve wheel position ID
+            const position = await new Promise((resolve, reject) => {
+                db.get(
+                    `SELECT id FROM wheel_positions 
+                    WHERE vehicle_id = ? AND position_code = ?`,
+                    [vehicle_id, position_code],
+                    (err, row) => err ? reject(err) : resolve(row)
+                );
+            });
+
+            if (!position) {
+                return res.status(400).json({ error: 'Invalid wheel position for vehicle' });
+            }
+
+            // 3️⃣ Create assignment (FK-safe)
             const assignmentId = await Assignment.create({
                 tire_id,
                 vehicle_id,
-                position_id,
+                position_id: position.id, // ✅ INTEGER
                 install_date,
                 install_odometer,
                 reason_for_change: reason,
                 created_by: user_id
             });
 
-            // Update tire status
+            // 4️⃣ Update tire status
             await Tire.updateStatus(tire_id, 'ON_VEHICLE', `Vehicle ${vehicle_id}`);
 
-            // Log movement
+            // 5️⃣ Log movement
             await Movement.logMovement({
                 tire_id,
                 from_location: 'MAIN_WAREHOUSE',
@@ -107,17 +131,17 @@ class TireController {
                 notes: `Installed on vehicle ${vehicle_id}`
             });
 
-            const updatedTire = await Tire.findById(tire_id);
             res.json({
                 message: 'Tire installed successfully',
-                tire: updatedTire,
                 assignment_id: assignmentId
             });
+
         } catch (error) {
             console.error('Error installing tire:', error);
             res.status(500).json({ error: 'Failed to install tire' });
         }
     }
+
 
     // 3. Remove tire from vehicle
     static async removeFromVehicle(req, res) {
