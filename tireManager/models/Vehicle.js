@@ -91,7 +91,6 @@ class Vehicle {
         return vehicle;
     }
 
-
     static async addWheelPositions(vehicleId, positions) {
         const sql = `INSERT INTO wheel_positions 
                     (vehicle_id, position_code, position_name, axle_number, is_trailer) 
@@ -115,60 +114,35 @@ class Vehicle {
         return Promise.all(promises);
     }
 
-    // static async getVehicleWithPositions(vehicleId) {
-    //     const vehicleSql = `SELECT * FROM vehicles WHERE id = ?`;
-    //     const positionsSql = `SELECT * FROM wheel_positions WHERE vehicle_id = ? ORDER BY axle_number, position_code`;
-        
-    //     return new Promise((resolve, reject) => {
-    //         db.get(vehicleSql, [vehicleId], (err, vehicle) => {
-    //             if (err) {
-    //                 reject(err);
-    //                 return;
-    //             }
-                
-    //             db.all(positionsSql, [vehicleId], (err, positions) => {
-    //                 if (err) {
-    //                     reject(err);
-    //                     return;
-    //                 }
-                    
-    //                 vehicle.positions = positions;
-    //                 resolve(vehicle);
-    //             });
-    //         });
-    //     });
-    // }
-
     static async getVehicleWithPositions(vehicleId) {
-    const vehicleSql = `SELECT * FROM vehicles WHERE id = ?`;
-    const positionsSql = `SELECT * FROM wheel_positions WHERE vehicle_id = ? ORDER BY axle_number, position_code`;
-    
-    return new Promise((resolve, reject) => {
-        db.get(vehicleSql, [vehicleId], (err, vehicle) => {
-            if (err) {
-                reject(err);
-                return;
-            }
-
-            if (!vehicle) {
-                // Vehicle not found
-                resolve(null);
-                return;
-            }
-            
-            db.all(positionsSql, [vehicleId], (err, positions) => {
+        const vehicleSql = `SELECT * FROM vehicles WHERE id = ?`;
+        const positionsSql = `SELECT * FROM wheel_positions WHERE vehicle_id = ? ORDER BY axle_number, position_code`;
+        
+        return new Promise((resolve, reject) => {
+            db.get(vehicleSql, [vehicleId], (err, vehicle) => {
                 if (err) {
                     reject(err);
                     return;
                 }
+
+                if (!vehicle) {
+                    // Vehicle not found
+                    resolve(null);
+                    return;
+                }
                 
-                vehicle.positions = positions;
-                resolve(vehicle);
+                db.all(positionsSql, [vehicleId], (err, positions) => {
+                    if (err) {
+                        reject(err);
+                        return;
+                    }
+                    
+                    vehicle.positions = positions;
+                    resolve(vehicle);
+                });
             });
         });
-    });
-}
-
+    }
 
     static async getCurrentTires(vehicleId) {
         const sql = `
@@ -214,51 +188,50 @@ class Vehicle {
     }
 
     static async getPaginatedVehicles({ limit, offset, search }) {
-    const where = search
-        ? `WHERE vehicle_number LIKE ? OR make LIKE ? OR model LIKE ?`
-        : '';
+        const where = search
+            ? `WHERE vehicle_number LIKE ? OR make LIKE ? OR model LIKE ?`
+            : '';
 
-    const params = search
-        ? [`%${search}%`, `%${search}%`, `%${search}%`]
-        : [];
+        const params = search
+            ? [`%${search}%`, `%${search}%`, `%${search}%`]
+            : [];
 
-    const vehicles = await new Promise((resolve, reject) => {
-        db.all(
-            `
-            SELECT v.*,
-                (
-                    SELECT COUNT(*)
-                    FROM tire_assignments ta
-                    WHERE ta.vehicle_id = v.id
-                      AND ta.removal_date IS NULL
-                ) AS active_tires_count
-            FROM vehicles v
-            ${where}
-            ORDER BY v.created_at DESC
-            LIMIT ? OFFSET ?
-            `,
-            [...params, limit, offset],
-            (err, rows) => {
-                if (err) reject(err);
-                else resolve(rows);
-            }
-        );
-    });
+        const vehicles = await new Promise((resolve, reject) => {
+            db.all(
+                `
+                SELECT v.*,
+                    (
+                        SELECT COUNT(*)
+                        FROM tire_assignments ta
+                        WHERE ta.vehicle_id = v.id
+                          AND ta.removal_date IS NULL
+                    ) AS active_tires_count
+                FROM vehicles v
+                ${where}
+                ORDER BY v.created_at DESC
+                LIMIT ? OFFSET ?
+                `,
+                [...params, limit, offset],
+                (err, rows) => {
+                    if (err) reject(err);
+                    else resolve(rows);
+                }
+            );
+        });
 
-    const total = await new Promise((resolve, reject) => {
-        db.get(
-            `SELECT COUNT(*) as count FROM vehicles ${where}`,
-            params,
-            (err, row) => {
-                if (err) reject(err);
-                else resolve(row.count);
-            }
-        );
-    });
+        const total = await new Promise((resolve, reject) => {
+            db.get(
+                `SELECT COUNT(*) as count FROM vehicles ${where}`,
+                params,
+                (err, row) => {
+                    if (err) reject(err);
+                    else resolve(row.count);
+                }
+            );
+        });
 
-    return { vehicles, total };
-}
-
+        return { vehicles, total };
+    }
 }
 
 module.exports = Vehicle;
