@@ -14,6 +14,7 @@ const inventoryRoutes = require('./routes/inventory');
 const supplierRoutes = require('./routes/suppliers');
 const movementRoutes = require('./routes/movements');
 const authRoutes = require('./routes/auth');
+const purchaseOrderRoutes = require('./routes/purchaseOrderRoutes');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -39,6 +40,7 @@ app.use('/api/vehicles', vehicleRoutes);
 app.use('/api/inventory', inventoryRoutes);
 app.use('/api/suppliers', supplierRoutes);
 app.use('/api/movements', movementRoutes);
+app.use('/api/purchase-orders', purchaseOrderRoutes);
 
 // Health check
 app.get('/health', (req, res) => {
