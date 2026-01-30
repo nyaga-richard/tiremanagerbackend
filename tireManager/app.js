@@ -14,7 +14,8 @@ const inventoryRoutes = require('./routes/inventory');
 const supplierRoutes = require('./routes/suppliers');
 const movementRoutes = require('./routes/movements');
 const authRoutes = require('./routes/auth');
-const purchaseOrderRoutes = require('./routes/purchaseOrderRoutes');
+//const purchaseOrderRoutes = require('./routes/purchaseOrderRoutes');
+const purchaseOrderRoutes = require('./routes/purchaseOrders');
 
 const app = express();
 const PORT = process.env.PORT || 5000;

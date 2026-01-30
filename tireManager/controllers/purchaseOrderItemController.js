@@ -2,18 +2,27 @@ const PurchaseOrderItem = require('../models/PurchaseOrderItem');
 const PurchaseOrder = require('../models/PurchaseOrder');
 
 class PurchaseOrderItemController {
-    constructor(authMiddleware) {
-        this.authMiddleware = authMiddleware;
+    constructor() {
+        // Bind methods
+        this.create = this.create.bind(this);
+        this.getByPoId = this.getByPoId.bind(this);
+        this.getById = this.getById.bind(this);
+        this.update = this.update.bind(this);
+        this.delete = this.delete.bind(this);
+        this.receive = this.receive.bind(this);
+        this.getReceiptHistory = this.getReceiptHistory.bind(this);
+        this.generateTires = this.generateTires.bind(this);
     }
 
-    // Add item to purchase order
-    async addItem(req, res) {
+    // Create PO Item
+    async create(req, res) {
         try {
             const { poId } = req.params;
             const itemData = req.body;
+            const db = require('../config/database');
             
             // Check if PO exists and is in a valid state for adding items
-            const purchaseOrder = await PurchaseOrder.findById(poId);
+            const purchaseOrder = await PurchaseOrder.findById(db, poId);
             if (!purchaseOrder) {
                 return res.status(404).json({
                     success: false,
@@ -31,28 +40,33 @@ class PurchaseOrderItemController {
             
             itemData.po_id = parseInt(poId);
             
-            const itemId = await PurchaseOrderItem.create(itemData);
-            
-            // Update PO totals
-            await PurchaseOrderItem.updatePoTotal(poId);
-            
-            const item = await PurchaseOrderItem.findById(itemId);
-            
-            // Log audit trail
-            await this.authMiddleware.logAudit(
-                req.user.id,
-                'CREATE',
-                'PO_ITEM',
-                itemId,
-                null,
-                item,
-                req
-            );
+            // Start transaction
+            const result = await new Promise((resolve, reject) => {
+                db.run('BEGIN TRANSACTION', [], async (err) => {
+                    if (err) return reject(err);
+                    
+                    try {
+                        const itemId = await PurchaseOrderItem.create(db, itemData);
+                        
+                        // Update PO totals
+                        await PurchaseOrderItem.updatePoTotal(db, poId);
+                        
+                        const item = await PurchaseOrderItem.findById(db, itemId);
+                        
+                        db.run('COMMIT', [], (err) => {
+                            if (err) return reject(err);
+                            resolve(item);
+                        });
+                    } catch (error) {
+                        db.run('ROLLBACK', [], () => reject(error));
+                    }
+                });
+            });
             
             res.status(201).json({
                 success: true,
                 message: 'Item added to purchase order',
-                data: item
+                data: result
             });
         } catch (error) {
             console.error('Error adding item to PO:', error);
@@ -64,193 +78,35 @@ class PurchaseOrderItemController {
         }
     }
 
-    // Update purchase order item
-    async updateItem(req, res) {
+    // Get items by PO ID
+    async getByPoId(req, res) {
         try {
-            const { itemId } = req.params;
-            const updateData = req.body;
+            const { poId } = req.params;
+            const db = require('../config/database');
             
-            // Get old values for audit trail
-            const oldItem = await PurchaseOrderItem.findById(itemId);
-            if (!oldItem) {
-                return res.status(404).json({
-                    success: false,
-                    message: 'Item not found'
-                });
-            }
-            
-            // Don't allow updating certain fields
-            delete updateData.po_id;
-            delete updateData.received_quantity; // Use receive endpoint for this
-            
-            const changes = await PurchaseOrderItem.update(itemId, updateData);
-            
-            if (changes === 0) {
-                return res.status(404).json({
-                    success: false,
-                    message: 'Item not found or no changes made'
-                });
-            }
-            
-            // Update PO totals
-            await PurchaseOrderItem.updatePoTotal(oldItem.po_id);
-            
-            const updatedItem = await PurchaseOrderItem.findById(itemId);
-            
-            // Log audit trail
-            await this.authMiddleware.logAudit(
-                req.user.id,
-                'UPDATE',
-                'PO_ITEM',
-                itemId,
-                oldItem,
-                updatedItem,
-                req
-            );
+            const items = await PurchaseOrderItem.findByPoId(db, poId);
             
             res.json({
                 success: true,
-                message: 'Item updated successfully',
-                data: updatedItem
+                data: items
             });
         } catch (error) {
-            console.error('Error updating PO item:', error);
+            console.error('Error fetching items:', error);
             res.status(500).json({
                 success: false,
-                message: 'Failed to update item',
+                message: 'Failed to fetch items',
                 error: error.message
             });
         }
     }
 
-    // Delete purchase order item
-    async deleteItem(req, res) {
+    // Get item by ID
+    async getById(req, res) {
         try {
-            const { itemId } = req.params;
+            const { id } = req.params;
+            const db = require('../config/database');
             
-            // Get old values for audit trail
-            const oldItem = await PurchaseOrderItem.findById(itemId);
-            if (!oldItem) {
-                return res.status(404).json({
-                    success: false,
-                    message: 'Item not found'
-                });
-            }
-            
-            const changes = await PurchaseOrderItem.delete(itemId);
-            
-            if (changes === 0) {
-                return res.status(404).json({
-                    success: false,
-                    message: 'Item not found or cannot be deleted'
-                });
-            }
-            
-            // Update PO totals
-            await PurchaseOrderItem.updatePoTotal(oldItem.po_id);
-            
-            // Log audit trail
-            await this.authMiddleware.logAudit(
-                req.user.id,
-                'DELETE',
-                'PO_ITEM',
-                itemId,
-                oldItem,
-                null,
-                req
-            );
-            
-            res.json({
-                success: true,
-                message: 'Item deleted successfully'
-            });
-        } catch (error) {
-            console.error('Error deleting PO item:', error);
-            res.status(500).json({
-                success: false,
-                message: error.message || 'Failed to delete item'
-            });
-        }
-    }
-
-    // Receive items (partial or full)
-    async receiveItems(req, res) {
-        try {
-            const { itemId } = req.params;
-            const { quantity, batch_number } = req.body;
-            
-            if (!quantity || quantity <= 0) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'Valid quantity is required'
-                });
-            }
-            
-            // Check if item exists
-            const item = await PurchaseOrderItem.findById(itemId);
-            if (!item) {
-                return res.status(404).json({
-                    success: false,
-                    message: 'Item not found'
-                });
-            }
-            
-            // Check if PO is in a valid state for receiving
-            if (!['APPROVED', 'ORDERED', 'PARTIALLY_RECEIVED'].includes(item.po_status)) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'Cannot receive items for a purchase order that is not approved or ordered'
-                });
-            }
-            
-            // Check if quantity exceeds remaining
-            const remaining = item.quantity - item.received_quantity;
-            if (quantity > remaining) {
-                return res.status(400).json({
-                    success: false,
-                    message: `Cannot receive more than ${remaining} items (${quantity} requested)`
-                });
-            }
-            
-            const result = await PurchaseOrderItem.receiveItems(
-                itemId, 
-                quantity, 
-                batch_number, 
-                req.user.id
-            );
-            
-            // Log audit trail
-            await this.authMiddleware.logAudit(
-                req.user.id,
-                'RECEIVE',
-                'PO_ITEM',
-                itemId,
-                { received_quantity: item.received_quantity },
-                { received_quantity: item.received_quantity + quantity },
-                req
-            );
-            
-            res.json({
-                success: true,
-                message: 'Items received successfully',
-                data: result
-            });
-        } catch (error) {
-            console.error('Error receiving items:', error);
-            res.status(500).json({
-                success: false,
-                message: 'Failed to receive items',
-                error: error.message
-            });
-        }
-    }
-
-    // Get item details
-    async getItem(req, res) {
-        try {
-            const { itemId } = req.params;
-            
-            const item = await PurchaseOrderItem.findById(itemId);
+            const item = await PurchaseOrderItem.findById(db, id);
             
             if (!item) {
                 return res.status(404).json({
@@ -273,12 +129,211 @@ class PurchaseOrderItemController {
         }
     }
 
+    // Update purchase order item
+    async update(req, res) {
+        try {
+            const { id } = req.params;
+            const updateData = req.body;
+            const db = require('../config/database');
+            
+            // Get old values
+            const oldItem = await PurchaseOrderItem.findById(db, id);
+            if (!oldItem) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Item not found'
+                });
+            }
+            
+            // Don't allow updating certain fields
+            delete updateData.po_id;
+            delete updateData.received_quantity;
+            
+            // Start transaction
+            const result = await new Promise((resolve, reject) => {
+                db.run('BEGIN TRANSACTION', [], async (err) => {
+                    if (err) return reject(err);
+                    
+                    try {
+                        const changes = await PurchaseOrderItem.update(db, id, updateData);
+                        
+                        if (changes === 0) {
+                            throw new Error('Item not found or no changes made');
+                        }
+                        
+                        // Update PO totals
+                        await PurchaseOrderItem.updatePoTotal(db, oldItem.po_id);
+                        
+                        const updatedItem = await PurchaseOrderItem.findById(db, id);
+                        
+                        db.run('COMMIT', [], (err) => {
+                            if (err) return reject(err);
+                            resolve(updatedItem);
+                        });
+                    } catch (error) {
+                        db.run('ROLLBACK', [], () => reject(error));
+                    }
+                });
+            });
+            
+            res.json({
+                success: true,
+                message: 'Item updated successfully',
+                data: result
+            });
+        } catch (error) {
+            console.error('Error updating PO item:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Failed to update item',
+                error: error.message
+            });
+        }
+    }
+
+    // Delete purchase order item
+    async delete(req, res) {
+        try {
+            const { id } = req.params;
+            const db = require('../config/database');
+            
+            // Get old values
+            const oldItem = await PurchaseOrderItem.findById(db, id);
+            if (!oldItem) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Item not found'
+                });
+            }
+            
+            // Check if PO is in editable state
+            const po = await PurchaseOrder.findById(db, oldItem.po_id);
+            if (!['DRAFT', 'PENDING_APPROVAL'].includes(po.status)) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Cannot delete items from a processed purchase order'
+                });
+            }
+            
+            // Start transaction
+            await new Promise((resolve, reject) => {
+                db.run('BEGIN TRANSACTION', [], async (err) => {
+                    if (err) return reject(err);
+                    
+                    try {
+                        const changes = await PurchaseOrderItem.delete(db, id);
+                        
+                        if (changes === 0) {
+                            throw new Error('Item not found or cannot be deleted');
+                        }
+                        
+                        // Update PO totals
+                        await PurchaseOrderItem.updatePoTotal(db, oldItem.po_id);
+                        
+                        db.run('COMMIT', [], (err) => {
+                            if (err) return reject(err);
+                            resolve();
+                        });
+                    } catch (error) {
+                        db.run('ROLLBACK', [], () => reject(error));
+                    }
+                });
+            });
+            
+            res.json({
+                success: true,
+                message: 'Item deleted successfully'
+            });
+        } catch (error) {
+            console.error('Error deleting PO item:', error);
+            res.status(500).json({
+                success: false,
+                message: error.message || 'Failed to delete item'
+            });
+        }
+    }
+
+    // Receive items (partial or full)
+    async receive(req, res) {
+        try {
+            const { id } = req.params;
+            const { quantity, batch_number } = req.body;
+            const db = require('../config/database');
+            
+            if (!quantity || quantity <= 0) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Valid quantity is required'
+                });
+            }
+            
+            // Check if item exists
+            const item = await PurchaseOrderItem.findById(db, id);
+            if (!item) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Item not found'
+                });
+            }
+            
+            // Check if quantity exceeds remaining
+            const remaining = item.quantity - item.received_quantity;
+            if (quantity > remaining) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Cannot receive more than ${remaining} items (${quantity} requested)`
+                });
+            }
+            
+            // Start transaction
+            const result = await new Promise((resolve, reject) => {
+                db.run('BEGIN TRANSACTION', [], async (err) => {
+                    if (err) return reject(err);
+                    
+                    try {
+                        const receipt = await PurchaseOrderItem.receiveItems(
+                            db,
+                            id, 
+                            quantity, 
+                            batch_number, 
+                            req.user?.id || 1
+                        );
+                        
+                        // Update PO status if needed
+                        await PurchaseOrder.checkAndUpdateStatus(db, item.po_id);
+                        
+                        db.run('COMMIT', [], (err) => {
+                            if (err) return reject(err);
+                            resolve(receipt);
+                        });
+                    } catch (error) {
+                        db.run('ROLLBACK', [], () => reject(error));
+                    }
+                });
+            });
+            
+            res.json({
+                success: true,
+                message: 'Items received successfully',
+                data: result
+            });
+        } catch (error) {
+            console.error('Error receiving items:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Failed to receive items',
+                error: error.message
+            });
+        }
+    }
+
     // Get receipt history for an item
     async getReceiptHistory(req, res) {
         try {
-            const { itemId } = req.params;
+            const { id } = req.params;
+            const db = require('../config/database');
             
-            const history = await PurchaseOrderItem.getReceiptHistory(itemId);
+            const history = await PurchaseOrderItem.getReceiptHistory(db, id);
             
             res.json({
                 success: true,
@@ -294,21 +349,50 @@ class PurchaseOrderItemController {
         }
     }
 
+    // Generate tires from PO item
+    async generateTires(req, res) {
+        try {
+            const { id } = req.params;
+            const { start_serial } = req.body;
+            const db = require('../config/database');
+            
+            const result = await PurchaseOrderItem.generateTires(
+                db,
+                id,
+                start_serial || null
+            );
+            
+            res.json({
+                success: true,
+                message: 'Tires generated successfully',
+                data: result
+            });
+        } catch (error) {
+            console.error('Error generating tires:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Failed to generate tires',
+                error: error.message
+            });
+        }
+    }
+
     // Bulk update items for a PO
     async bulkUpdateItems(req, res) {
         try {
             const { poId } = req.params;
             const { items } = req.body;
+            const db = require('../config/database');
             
-            if (!Array.isArray(items)) {
+            if (!Array.isArray(items) || items.length === 0) {
                 return res.status(400).json({
                     success: false,
-                    message: 'Items must be an array'
+                    message: 'Items must be a non-empty array'
                 });
             }
             
             // Check if PO exists and is in a valid state
-            const purchaseOrder = await PurchaseOrder.findById(poId);
+            const purchaseOrder = await PurchaseOrder.findById(db, poId);
             if (!purchaseOrder) {
                 return res.status(404).json({
                     success: false,
@@ -323,68 +407,62 @@ class PurchaseOrderItemController {
                 });
             }
             
-            const results = [];
-            const errors = [];
-            
-            for (const item of items) {
-                try {
-                    if (item.id) {
-                        // Update existing item
-                        const { id, ...updateData } = item;
-                        await PurchaseOrderItem.update(id, updateData);
-                        const updatedItem = await PurchaseOrderItem.findById(id);
-                        results.push({ action: 'update', id, data: updatedItem });
+            // Start transaction
+            const result = await new Promise((resolve, reject) => {
+                db.run('BEGIN TRANSACTION', [], async (err) => {
+                    if (err) return reject(err);
+                    
+                    try {
+                        const results = [];
+                        const errors = [];
                         
-                        // Log audit trail for each update
-                        await this.authMiddleware.logAudit(
-                            req.user.id,
-                            'BULK_UPDATE',
-                            'PO_ITEM',
-                            id,
-                            null,
-                            updateData,
-                            req
-                        );
-                    } else {
-                        // Create new item
-                        item.po_id = parseInt(poId);
-                        const newId = await PurchaseOrderItem.create(item);
-                        const newItem = await PurchaseOrderItem.findById(newId);
-                        results.push({ action: 'create', id: newId, data: newItem });
+                        for (const item of items) {
+                            try {
+                                if (item.id) {
+                                    // Update existing item
+                                    const { id, ...updateData } = item;
+                                    await PurchaseOrderItem.update(db, id, updateData);
+                                    const updatedItem = await PurchaseOrderItem.findById(db, id);
+                                    results.push({ action: 'update', id, data: updatedItem });
+                                } else {
+                                    // Create new item
+                                    item.po_id = parseInt(poId);
+                                    const newId = await PurchaseOrderItem.create(db, item);
+                                    const newItem = await PurchaseOrderItem.findById(db, newId);
+                                    results.push({ action: 'create', id: newId, data: newItem });
+                                }
+                            } catch (error) {
+                                errors.push({
+                                    item: item,
+                                    error: error.message
+                                });
+                            }
+                        }
                         
-                        // Log audit trail for each create
-                        await this.authMiddleware.logAudit(
-                            req.user.id,
-                            'BULK_CREATE',
-                            'PO_ITEM',
-                            newId,
-                            null,
-                            item,
-                            req
-                        );
+                        // Update PO totals
+                        await PurchaseOrderItem.updatePoTotal(db, poId);
+                        
+                        // Refresh PO to get updated totals
+                        const updatedPO = await PurchaseOrder.findById(db, poId);
+                        
+                        db.run('COMMIT', [], (err) => {
+                            if (err) return reject(err);
+                            resolve({
+                                results,
+                                errors,
+                                purchaseOrder: updatedPO
+                            });
+                        });
+                    } catch (error) {
+                        db.run('ROLLBACK', [], () => reject(error));
                     }
-                } catch (error) {
-                    errors.push({
-                        item: item,
-                        error: error.message
-                    });
-                }
-            }
-            
-            // Update PO totals
-            await PurchaseOrderItem.updatePoTotal(poId);
-            
-            // Refresh PO to get updated totals
-            const updatedPO = await PurchaseOrder.findById(poId);
+                });
+            });
             
             res.json({
                 success: true,
                 message: 'Bulk update completed',
-                data: {
-                    results: results,
-                    errors: errors,
-                    purchaseOrder: updatedPO
-                }
+                data: result
             });
         } catch (error) {
             console.error('Error in bulk update:', error);
