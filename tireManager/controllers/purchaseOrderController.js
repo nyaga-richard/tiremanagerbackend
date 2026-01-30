@@ -45,20 +45,53 @@ class PurchaseOrderController {
             const { status, supplier_id, date_from, date_to, page = 1, limit = 20 } = req.query;
             
             const filters = {};
-            if (status) filters.status = status;
-            if (supplier_id) filters.supplier_id = parseInt(supplier_id);
-            if (date_from) filters.date_from = date_from;
-            if (date_to) filters.date_to = date_to;
             
-            const result = await PurchaseOrder.findAll(db, filters, parseInt(page), parseInt(limit));
+            // Only add filters if they exist
+            if (status && status.trim() !== '') {
+                filters.status = status;
+            }
+            if (supplier_id && supplier_id.trim() !== '') {
+                const parsedId = parseInt(supplier_id);
+                if (!isNaN(parsedId)) {
+                    filters.supplier_id = parsedId;
+                }
+            }
+            if (date_from && date_from.trim() !== '') {
+                filters.start_date = date_from;  // Note: model expects start_date, not date_from
+            }
+            if (date_to && date_to.trim() !== '') {
+                filters.end_date = date_to;      // Note: model expects end_date, not date_to
+            }
+            
+            // Parse page and limit as integers
+            const pageNum = parseInt(page);
+            const limitNum = parseInt(limit);
+            
+            // Ensure they're valid numbers
+            const validPage = !isNaN(pageNum) && pageNum > 0 ? pageNum : 1;
+            const validLimit = !isNaN(limitNum) && limitNum > 0 ? limitNum : 20;
+            
+            console.log('Calling PurchaseOrder.findAll with:', { 
+                filters, 
+                page: validPage, 
+                limit: validLimit 
+            });
+            
+            const result = await PurchaseOrder.findAll(filters, validPage, validLimit);
             
             res.json({
                 success: true,
                 data: result.data,
-                pagination: result.pagination
+                pagination: {
+                    page: validPage,
+                    limit: validLimit,
+                    total: result.total,
+                    pages: result.totalPages
+                }
             });
         } catch (error) {
             console.error('Error fetching purchase orders:', error);
+            console.error('Error stack:', error.stack);
             res.status(500).json({
                 success: false,
                 message: 'Failed to fetch purchase orders',
