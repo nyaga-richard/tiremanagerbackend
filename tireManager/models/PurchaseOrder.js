@@ -48,6 +48,252 @@ class PurchaseOrder {
         });
     }
 
+// Update the createWithItems method in PurchaseOrder model
+    static async createWithItems(db, poData, items = []) {
+        console.log('createWithItems called with poData:', poData);
+        
+        return new Promise((resolve, reject) => {
+            // Store reference to 'this' for use in callbacks
+            const self = this;
+            
+            db.serialize(() => {
+                db.run('BEGIN TRANSACTION');
+                
+                // Generate PO number if not provided
+                const generateNumberIfNeeded = async () => {
+                    if (!poData.po_number) {
+                        try {
+                            poData.po_number = await self.generatePoNumber();
+                            console.log('Generated PO number:', poData.po_number);
+                        } catch (error) {
+                            console.error('Error generating PO number:', error);
+                            // Fallback number
+                            const year = new Date().getFullYear();
+                            const month = (new Date().getMonth() + 1).toString().padStart(2, '0');
+                            poData.po_number = `PO-${year}${month}-9999`;
+                        }
+                    }
+                    return poData.po_number;
+                };
+
+                // Start the process
+                generateNumberIfNeeded().then(() => {
+                    const {
+                        po_number,
+                        supplier_id,
+                        po_date,
+                        expected_delivery_date = null,
+                        status = 'DRAFT',
+                        total_amount = 0,
+                        tax_amount = 0,
+                        shipping_amount = 0,
+                        final_amount = 0,
+                        notes = null,
+                        terms = null,
+                        shipping_address = null,
+                        billing_address = null,
+                        created_by
+                    } = poData;
+
+                    console.log('Inserting PO with number:', po_number);
+
+                    const insertPoSql = `INSERT INTO purchase_orders 
+                        (po_number, supplier_id, po_date, expected_delivery_date, status,
+                        total_amount, tax_amount, shipping_amount, final_amount,
+                        notes, terms, shipping_address, billing_address, created_by)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+
+                    db.run(insertPoSql, [
+                        po_number,
+                        supplier_id,
+                        po_date,
+                        expected_delivery_date,
+                        status,
+                        total_amount || 0,
+                        tax_amount || 0,
+                        shipping_amount || 0,
+                        final_amount || 0,
+                        notes,
+                        terms,
+                        shipping_address,
+                        billing_address,
+                        created_by
+                    ], function(err) {
+                        if (err) {
+                            console.error('Error inserting PO:', err);
+                            db.run('ROLLBACK');
+                            reject(err);
+                            return;
+                        }
+
+                        const poId = this.lastID;
+                        console.log('PO inserted with ID:', poId);
+                        
+                        // Calculate totals from items if not provided
+                        let calculatedTotal = 0;
+                        if (items.length > 0) {
+                            items.forEach(item => {
+                                const itemTotal = item.total_price || (item.quantity * item.unit_price);
+                                calculatedTotal += itemTotal;
+                            });
+                            
+                            // If total_amount wasn't provided, use calculated total
+                            if (!total_amount && calculatedTotal > 0) {
+                                // Update the PO with calculated total
+                                const updateSql = `UPDATE purchase_orders SET 
+                                    total_amount = ?,
+                                    final_amount = ? + COALESCE(tax_amount, 0) + COALESCE(shipping_amount, 0)
+                                    WHERE id = ?`;
+                                
+                                db.run(updateSql, [calculatedTotal, calculatedTotal, poId], (err) => {
+                                    if (err) {
+                                        console.error('Error updating PO totals:', err);
+                                    }
+                                });
+                            }
+                        }
+                        
+                        // If there are items, insert them
+                        if (items.length > 0) {
+                            let itemsProcessed = 0;
+                            let hasError = false;
+                            
+                            items.forEach((item, index) => {
+                                // Calculate total_price if not provided
+                                const totalPrice = item.total_price || (item.quantity * item.unit_price);
+                                
+                                // Use only columns that exist in the table
+                                const itemSql = `INSERT INTO purchase_order_items 
+                                    (po_id, size, brand, model, type, quantity, unit_price, notes)
+                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;
+                                
+                                console.log(`Inserting item ${index + 1}:`, {
+                                    po_id: poId,  // Make sure this is set
+                                    size: item.size,
+                                    type: item.type || 'NEW',
+                                    quantity: item.quantity,
+                                    unit_price: item.unit_price,
+                                    total_price: totalPrice
+                                });
+                                
+                                db.run(itemSql, [
+                                    poId,  // This is the crucial fix - passing poId
+                                    item.size,
+                                    item.brand || null,
+                                    item.model || null,
+                                    item.type || 'NEW',
+                                    item.quantity,
+                                    item.unit_price,
+                                    item.notes || null
+                                ], function(err) {
+                                    if (err) {
+                                        console.error(`Error inserting item ${index + 1}:`, err);
+                                        console.error('SQL error details:', err.message);
+                                        console.error('SQL being executed:', itemSql);
+                                        console.error('Parameters:', [poId, item.size, item.brand, item.model, item.type, item.quantity, item.unit_price, item.notes]);
+                                        hasError = true;
+                                        db.run('ROLLBACK');
+                                        reject(err);
+                                        return;
+                                    }
+                                    
+                                    itemsProcessed++;
+                                    console.log(`Item ${index + 1} inserted successfully with ID:`, this.lastID);
+                                    
+                                    // When all items are processed, commit transaction
+                                    if (!hasError && itemsProcessed === items.length) {
+                                        db.run('COMMIT', (err) => {
+                                            if (err) {
+                                                console.error('Error committing transaction:', err);
+                                                reject(err);
+                                                return;
+                                            }
+                                            
+                                            console.log('Transaction committed successfully');
+                                            
+                                            // Fetch the complete PO with items
+                                            self.findById(poId, true).then(completePO => {
+                                                console.log('Complete PO fetched:', completePO.po_number);
+                                                resolve(completePO);
+                                            }).catch(err => {
+                                                console.error('Error fetching complete PO:', err);
+                                                reject(err);
+                                            });
+                                        });
+                                    }
+                                });
+                            });
+                        } else {
+                            // No items, just commit
+                            db.run('COMMIT', (err) => {
+                                if (err) {
+                                    console.error('Error committing transaction:', err);
+                                    reject(err);
+                                    return;
+                                }
+                                
+                                console.log('Transaction committed (no items)');
+                                
+                                // Fetch the PO
+                                self.findById(poId, true).then(completePO => {
+                                    completePO.items = [];
+                                    resolve(completePO);
+                                }).catch(err => reject(err));
+                            });
+                        }
+                    });
+                }).catch(error => {
+                    console.error('Error in generateNumberIfNeeded:', error);
+                    db.run('ROLLBACK');
+                    reject(error);
+                });
+            });
+        });
+    }
+
+    static async findById(poId, includeItems = false) {
+        const sql = `
+            SELECT po.*, 
+                   s.name as supplier_name,
+                   s.contact_person as supplier_contact,
+                   s.phone as supplier_phone,
+                   s.email as supplier_email,
+                   s.address as supplier_address,
+                   u1.full_name as created_by_name,
+                   u2.full_name as approved_by_name
+            FROM purchase_orders po
+            LEFT JOIN suppliers s ON po.supplier_id = s.id
+            LEFT JOIN users u1 ON po.created_by = u1.id
+            LEFT JOIN users u2 ON po.approved_by = u2.id
+            WHERE po.id = ?`;
+
+        return new Promise((resolve, reject) => {
+            db.get(sql, [poId], async (err, row) => {
+                if (err) {
+                    reject(err);
+                    return;
+                }
+                
+                if (!row) {
+                    resolve(null);
+                    return;
+                }
+                
+                if (includeItems) {
+                    try {
+                        const items = await this.getItems(poId);
+                        row.items = items;
+                    } catch (itemErr) {
+                        console.error('Error fetching items:', itemErr);
+                        row.items = [];
+                    }
+                }
+                
+                resolve(row);
+            });
+        });
+    }
+
     static async update(poId, updateData) {
         const {
             expected_delivery_date,
@@ -140,29 +386,6 @@ class PurchaseOrder {
         });
     }
 
-    static async findById(poId) {
-        const sql = `
-            SELECT po.*, 
-                   s.name as supplier_name,
-                   s.contact_person as supplier_contact,
-                   s.phone as supplier_phone,
-                   s.email as supplier_email,
-                   s.address as supplier_address,
-                   u1.full_name as created_by_name,
-                   u2.full_name as approved_by_name
-            FROM purchase_orders po
-            LEFT JOIN suppliers s ON po.supplier_id = s.id
-            LEFT JOIN users u1 ON po.created_by = u1.id
-            LEFT JOIN users u2 ON po.approved_by = u2.id
-            WHERE po.id = ?`;
-
-        return new Promise((resolve, reject) => {
-            db.get(sql, [poId], (err, row) => {
-                if (err) reject(err);
-                else resolve(row);
-            });
-        });
-    }
 
     static async findByPoNumber(poNumber) {
         const sql = `
@@ -354,6 +577,7 @@ class PurchaseOrder {
         });
     }
 
+    // In PurchaseOrder model, ensure generatePoNumber works correctly
     static async generatePoNumber() {
         const year = new Date().getFullYear();
         const month = (new Date().getMonth() + 1).toString().padStart(2, '0');
@@ -366,17 +590,26 @@ class PurchaseOrder {
         return new Promise((resolve, reject) => {
             db.get(sql, [], (err, row) => {
                 if (err) {
-                    reject(err);
+                    console.error('Error generating PO number:', err);
+                    // Return a fallback number
+                    const fallbackNumber = `PO-${year}${month}-0001`;
+                    console.log('Using fallback PO number:', fallbackNumber);
+                    resolve(fallbackNumber);
                     return;
                 }
 
                 let sequence = 1;
-                if (row) {
-                    const lastNumber = parseInt(row.po_number.split('-')[2]);
-                    sequence = lastNumber + 1;
+                if (row && row.po_number) {
+                    try {
+                        const lastNumber = parseInt(row.po_number.split('-')[2]);
+                        sequence = lastNumber + 1;
+                    } catch (e) {
+                        console.error('Error parsing PO number:', e);
+                    }
                 }
 
                 const poNumber = `PO-${year}${month}-${sequence.toString().padStart(4, '0')}`;
+                console.log('Generated PO number:', poNumber);
                 resolve(poNumber);
             });
         });

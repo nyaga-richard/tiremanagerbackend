@@ -13,30 +13,125 @@ class PurchaseOrderController {
         this.delete = this.delete.bind(this);
         this.getItems = this.getItems.bind(this);
     }
-
-    // Create purchase order
-    async create(req, res) {
-        try {
-            const poData = req.body;
-            const db = require('../config/database');
-            
-            const poId = await PurchaseOrder.create(db, poData);
-            const purchaseOrder = await PurchaseOrder.findById(db, poId);
-            
-            res.status(201).json({
-                success: true,
-                message: 'Purchase order created successfully',
-                data: purchaseOrder
-            });
-        } catch (error) {
-            console.error('Error creating purchase order:', error);
-            res.status(500).json({
+// Create purchase order
+async create(req, res) {
+    try {
+        let { items, ...poData } = req.body;
+        const db = require('../config/database');
+        
+        // Generate PO number if not provided
+        if (!poData.po_number) {
+            poData.po_number = await PurchaseOrder.generatePoNumber();
+        }
+        
+        // Validate required fields
+        const requiredFields = ['supplier_id', 'po_date', 'created_by'];
+        const missingFields = requiredFields.filter(field => !poData[field]);
+        
+        if (missingFields.length > 0) {
+            return res.status(400).json({
                 success: false,
-                message: 'Failed to create purchase order',
-                error: error.message
+                message: `Missing required fields: ${missingFields.join(', ')}`
             });
         }
+        
+        // Calculate totals from items if provided
+        if (items && Array.isArray(items) && items.length > 0) {
+            let totalAmount = 0;
+            
+            // Map field names for backward compatibility
+            items = items.map(item => ({
+                // Support both tire_size and size
+                size: item.tire_size || item.size,
+                // Support both tire_type and type
+                type: item.tire_type || item.type || 'NEW',
+                brand: item.brand,
+                model: item.model,
+                quantity: item.quantity,
+                unit_price: item.unit_price,
+                total_price: item.total_price,
+                load_index: item.load_index,
+                speed_rating: item.speed_rating,
+                season: item.season,
+                pattern: item.pattern,
+                warehouse_location: item.warehouse_location,
+                expected_delivery_date: item.expected_delivery_date,
+                notes: item.notes
+            }));
+            
+            console.log('Mapped items:', items);
+            
+            // Validate each item - now using 'size' instead of 'tire_size'
+            for (let i = 0; i < items.length; i++) {
+                const item = items[i];
+                if (!item.size || !item.quantity || !item.unit_price) {
+                    return res.status(400).json({
+                        success: false,
+                        message: `Item ${i + 1} is missing required fields: size, quantity, or unit_price`
+                    });
+                }
+                
+                // Calculate item total if not provided
+                if (!item.total_price) {
+                    item.total_price = item.quantity * item.unit_price;
+                }
+                
+                totalAmount += item.total_price;
+                
+                // Additional validations
+                if (item.quantity <= 0) {
+                    return res.status(400).json({
+                        success: false,
+                        message: `Item ${i + 1}: quantity must be greater than 0`
+                    });
+                }
+                
+                if (item.unit_price <= 0) {
+                    return res.status(400).json({
+                        success: false,
+                        message: `Item ${i + 1}: unit price must be greater than 0`
+                    });
+                }
+            }
+            
+            // Update PO totals
+            poData.total_amount = totalAmount;
+            poData.tax_amount = poData.tax_amount || (totalAmount * 0.1); // 10% tax if not provided
+            poData.shipping_amount = poData.shipping_amount || 0;
+            poData.final_amount = poData.total_amount + poData.tax_amount + poData.shipping_amount;
+        } else {
+            // Set defaults if no items
+            poData.total_amount = poData.total_amount || 0;
+            poData.tax_amount = poData.tax_amount || 0;
+            poData.shipping_amount = poData.shipping_amount || 0;
+            poData.final_amount = poData.final_amount || 
+                (poData.total_amount + poData.tax_amount + poData.shipping_amount);
+        }
+        
+        // Set default status
+        poData.status = poData.status || 'DRAFT';
+        
+        console.log('Creating purchase order with data:', poData);
+        
+        // Create purchase order with items in transaction
+        const result = await PurchaseOrder.createWithItems(db, poData, items || []);
+        
+        res.status(201).json({
+            success: true,
+            message: items && items.length > 0 
+                ? `Purchase order created successfully with ${items.length} items`
+                : 'Purchase order created successfully',
+            data: result
+        });
+    } catch (error) {
+        console.error('Error creating purchase order:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to create purchase order',
+            error: error.message
+        });
     }
+}
 
     // Get all purchase orders
     async getAll(req, res) {
@@ -146,7 +241,8 @@ class PurchaseOrderController {
             const { id } = req.params;
             const db = require('../config/database');
             
-            const purchaseOrder = await PurchaseOrder.findById(db, id);
+            // Always include items when getting a single PO
+            const purchaseOrder = await PurchaseOrder.findById(id, true);
             
             if (!purchaseOrder) {
                 return res.status(404).json({
