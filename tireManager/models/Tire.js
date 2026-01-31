@@ -1,6 +1,8 @@
 const db = require('../config/database');
+const { TIRE_SIZES, isValidSize } = require('../constants/tireSizes');
 
 class Tire {
+
     static async create(tireData) {
         const {
             serial_number,
@@ -15,16 +17,31 @@ class Tire {
             current_location
         } = tireData;
 
-        const sql = `INSERT INTO tires (
-            serial_number, size, brand, model, type, status, 
-            purchase_cost, supplier_id, purchase_date, current_location
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+        // ✅ Validate tire size
+        if (!isValidSize(size)) {
+            throw new Error(`Invalid tire size: ${size}`);
+        }
+
+        const sql = `
+            INSERT INTO tires (
+                serial_number, size, brand, model, type, status,
+                purchase_cost, supplier_id, purchase_date, current_location
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `;
 
         return new Promise((resolve, reject) => {
             db.run(sql, [
-                serial_number, size, brand, model, type, status,
-                purchase_cost, supplier_id, purchase_date, current_location
-            ], function(err) {
+                serial_number,
+                size,
+                brand,
+                model,
+                type,
+                status,
+                purchase_cost,
+                supplier_id,
+                purchase_date,
+                current_location
+            ], function (err) {
                 if (err) reject(err);
                 else resolve(this.lastID);
             });
@@ -42,10 +59,12 @@ class Tire {
     }
 
     static async findById(id) {
-        const sql = `SELECT t.*, s.name as supplier_name 
-                    FROM tires t 
-                    LEFT JOIN suppliers s ON t.supplier_id = s.id 
-                    WHERE t.id = ?`;
+        const sql = `
+            SELECT t.*, s.name AS supplier_name
+            FROM tires t
+            LEFT JOIN suppliers s ON t.supplier_id = s.id
+            WHERE t.id = ?
+        `;
         return new Promise((resolve, reject) => {
             db.get(sql, [id], (err, row) => {
                 if (err) reject(err);
@@ -55,14 +74,14 @@ class Tire {
     }
 
     static async updateStatus(id, status, location = null) {
-        const sql = location 
+        const sql = location
             ? `UPDATE tires SET status = ?, current_location = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
             : `UPDATE tires SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`;
-        
+
         const params = location ? [status, location, id] : [status, id];
-        
+
         return new Promise((resolve, reject) => {
-            db.run(sql, params, function(err) {
+            db.run(sql, params, function (err) {
                 if (err) reject(err);
                 else resolve(this.changes);
             });
@@ -83,14 +102,15 @@ class Tire {
         const sql = `
             SELECT 
                 size,
-                COUNT(CASE WHEN status = 'IN_STORE' AND type = 'NEW' THEN 1 END) as new_count,
-                COUNT(CASE WHEN status = 'IN_STORE' AND type = 'RETREADED' THEN 1 END) as retreaded_count,
-                COUNT(CASE WHEN status = 'USED_STORE' THEN 1 END) as used_count,
-                COUNT(CASE WHEN status = 'AWAITING_RETREAD' THEN 1 END) as retread_candidates_count
-            FROM tires 
+                COUNT(CASE WHEN status = 'IN_STORE' AND type = 'NEW' THEN 1 END) AS new_count,
+                COUNT(CASE WHEN status = 'IN_STORE' AND type = 'RETREADED' THEN 1 END) AS retreaded_count,
+                COUNT(CASE WHEN status = 'USED_STORE' THEN 1 END) AS used_count,
+                COUNT(CASE WHEN status = 'AWAITING_RETREAD' THEN 1 END) AS retread_candidates_count
+            FROM tires
             WHERE status IN ('IN_STORE', 'USED_STORE', 'AWAITING_RETREAD')
             GROUP BY size
-            ORDER BY size`;
+            ORDER BY size
+        `;
 
         return new Promise((resolve, reject) => {
             db.all(sql, [], (err, rows) => {
@@ -102,11 +122,12 @@ class Tire {
 
     static async getRetreadCandidates() {
         const sql = `
-            SELECT t.*, s.name as supplier_name
+            SELECT t.*, s.name AS supplier_name
             FROM tires t
             LEFT JOIN suppliers s ON t.supplier_id = s.id
             WHERE t.status = 'AWAITING_RETREAD'
-            ORDER BY t.size, t.brand`;
+            ORDER BY t.size, t.brand
+        `;
 
         return new Promise((resolve, reject) => {
             db.all(sql, [], (err, rows) => {
@@ -116,30 +137,37 @@ class Tire {
         });
     }
 
-        static async getHistory(tireId) {
-            const sql = `
-                SELECT 
-                    tm.*,
-                    ta.vehicle_id,
-                    v.vehicle_number,
-                    ta.position_id,
-                    wp.position_name
-                FROM tire_movements tm
-                LEFT JOIN tire_assignments ta ON tm.reference_id = ta.id AND tm.reference_type = 'ASSIGNMENT'
-                LEFT JOIN vehicles v ON ta.vehicle_id = v.id
-                LEFT JOIN wheel_positions wp ON ta.position_id = wp.id
-                WHERE tm.tire_id = ?
-                ORDER BY tm.movement_date DESC`;
+    static async getHistory(tireId) {
+        const sql = `
+            SELECT 
+                tm.*,
+                ta.vehicle_id,
+                v.vehicle_number,
+                ta.position_id,
+                wp.position_name
+            FROM tire_movements tm
+            LEFT JOIN tire_assignments ta 
+                ON tm.reference_id = ta.id 
+                AND tm.reference_type = 'ASSIGNMENT'
+            LEFT JOIN vehicles v ON ta.vehicle_id = v.id
+            LEFT JOIN wheel_positions wp ON ta.position_id = wp.id
+            WHERE tm.tire_id = ?
+            ORDER BY tm.movement_date DESC
+        `;
 
-            return new Promise((resolve, reject) => {
-                db.all(sql, [tireId], (err, rows) => {
-                    if (err) reject(err);
-                    else resolve(rows);
-                });
+        return new Promise((resolve, reject) => {
+            db.all(sql, [tireId], (err, rows) => {
+                if (err) reject(err);
+                else resolve(rows);
             });
+        });
+    }
+
+    static async getTiresBySize(size, status = null) {
+        // ✅ Validate size before querying
+        if (!isValidSize(size)) {
+            throw new Error(`Invalid tire size: ${size}`);
         }
-        static async getTiresBySize(size, status = null) {
-        const db = require('../config/database');
 
         let sql = `
             SELECT 
@@ -170,7 +198,6 @@ class Tire {
             });
         });
     }
-
 }
 
 module.exports = Tire;

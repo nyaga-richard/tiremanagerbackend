@@ -2,6 +2,8 @@ const express = require('express');
 const router = express.Router();
 const TireController = require('../controllers/tireController');
 
+
+
 // Purchase new tires
 router.post('/purchase', TireController.purchaseTires);
 
@@ -28,6 +30,8 @@ router.get('/:id', TireController.getTireDetails);
 
 // Search tires
 router.get('/', TireController.searchTires);
+
+
 
 
 module.exports = router;

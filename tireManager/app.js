@@ -16,6 +16,7 @@ const movementRoutes = require('./routes/movements');
 const authRoutes = require('./routes/auth');
 //const purchaseOrderRoutes = require('./routes/purchaseOrderRoutes');
 const purchaseOrderRoutes = require('./routes/purchaseOrders');
+const tireMetaRoutes = require('./routes/tireMeta');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -42,6 +43,7 @@ app.use('/api/inventory', inventoryRoutes);
 app.use('/api/suppliers', supplierRoutes);
 app.use('/api/movements', movementRoutes);
 app.use('/api/purchase-orders', purchaseOrderRoutes);
+app.use('/api/tires/meta', tireMetaRoutes);
 
 // Health check
 app.get('/health', (req, res) => {
