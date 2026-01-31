@@ -3,6 +3,7 @@ const Movement = require('../models/Movement');
 const Assignment = require('../models/Assignment');
 const Supplier = require('../models/Supplier');
 
+
 class TireController {
     // 1. Buy Tires from Supplier
     static async purchaseTires(req, res) {
