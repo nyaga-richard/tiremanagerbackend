@@ -347,7 +347,40 @@ async function createTables() {
             is_used BOOLEAN DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-        )`
+        )`,
+
+
+        `CREATE TABLE IF NOT EXISTS goods_received_notes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            grn_number TEXT UNIQUE NOT NULL,
+            po_id INTEGER NOT NULL,
+            receipt_date DATE NOT NULL,
+            received_by INTEGER NOT NULL,
+            supplier_invoice_number TEXT,
+            delivery_note_number TEXT,
+            vehicle_number TEXT,
+            driver_name TEXT,
+            notes TEXT,
+            status TEXT CHECK(status IN ('DRAFT', 'COMPLETED', 'CANCELLED')) DEFAULT 'DRAFT',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (po_id) REFERENCES purchase_orders(id),
+            FOREIGN KEY (received_by) REFERENCES users(id)
+        )`,
+
+        `CREATE TABLE IF NOT EXISTS grn_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            grn_id INTEGER NOT NULL,
+            po_item_id INTEGER NOT NULL,
+            quantity_received INTEGER NOT NULL CHECK(quantity_received > 0),
+            unit_cost REAL NOT NULL,
+            batch_number TEXT,
+            serial_numbers TEXT, -- JSON array of serial numbers
+            notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (grn_id) REFERENCES goods_received_notes(id) ON DELETE CASCADE,
+            FOREIGN KEY (po_item_id) REFERENCES purchase_order_items(id)
+        )`,
+            
     ];
 
     for (let i = 0; i < tables.length; i++) {
@@ -365,6 +398,9 @@ async function addMissingColumns() {
     
     // List of columns to add if they don't exist
     const columnUpdates = [
+        { table: 'tire_movements', column: 'grn_id', definition: 'INTEGER REFERENCES goods_received_notes(id)' },
+        { table: 'tires', column: 'grn_id', definition: 'INTEGER REFERENCES goods_received_notes(id)' },
+        { table: 'tires', column: 'grn_item_id', definition: 'INTEGER REFERENCES grn_items(id)' },
         { table: 'tires', column: 'po_item_id', definition: 'INTEGER REFERENCES purchase_order_items(id)' },
         { table: 'supplier_ledger', column: 'po_id', definition: 'INTEGER REFERENCES purchase_orders(id)' },
         { table: 'tire_movements', column: 'po_item_id', definition: 'INTEGER REFERENCES purchase_order_items(id)' },
