@@ -1,4 +1,3 @@
-// routes/grn.js
 const express = require('express');
 const router = express.Router();
 const GRNController = require('../controllers/GRNController');
@@ -11,6 +10,9 @@ router.get('/generate-number', (req, res) => grnController.generateGrnNumber(req
 
 // Get receipt preview for PO
 router.get('/preview/:poId', (req, res) => grnController.getReceiptPreview(req, res));
+
+// Get all GRNs (with filtering)
+router.get('/', (req, res) => grnController.getAll(req, res));
 
 // Create GRN
 router.post('/', (req, res) => grnController.create(req, res));

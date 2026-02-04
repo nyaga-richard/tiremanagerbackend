@@ -2,6 +2,131 @@ const db = require('../config/database');
 const PurchaseOrder = require('./PurchaseOrder');
 
 class GoodsReceivedNote {
+    static async findAll(filters = {}, page = 1, limit = 20) {
+        const {
+            search,
+            status,
+            start_date,
+            end_date,
+            supplier_id,
+            po_number,
+            sort_by = 'receipt_date',
+            sort_order = 'DESC'
+        } = filters;
+
+        const offset = (page - 1) * limit;
+
+        // Build WHERE clause
+        const whereConditions = [];
+        const params = [];
+
+        if (search) {
+            whereConditions.push(`
+                (grn.grn_number LIKE ? OR 
+                 po.po_number LIKE ? OR 
+                 s.name LIKE ? OR 
+                 s.id LIKE ? OR 
+                 grn.supplier_invoice_number LIKE ? OR 
+                 grn.delivery_note_number LIKE ?)
+            `);
+            const searchTerm = `%${search}%`;
+            params.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
+        }
+
+        if (status) {
+            whereConditions.push('grn.status = ?');
+            params.push(status);
+        }
+
+        if (start_date) {
+            whereConditions.push('grn.receipt_date >= ?');
+            params.push(start_date);
+        }
+
+        if (end_date) {
+            whereConditions.push('grn.receipt_date <= ?');
+            params.push(end_date);
+        }
+
+        if (supplier_id) {
+            whereConditions.push('po.supplier_id = ?');
+            params.push(supplier_id);
+        }
+
+        if (po_number) {
+            whereConditions.push('po.po_number = ?');
+            params.push(po_number);
+        }
+
+        const whereClause = whereConditions.length > 0 
+            ? `WHERE ${whereConditions.join(' AND ')}` 
+            : '';
+
+        // Count total records
+        const countSql = `
+            SELECT COUNT(*) as total
+            FROM goods_received_notes grn
+            JOIN purchase_orders po ON grn.po_id = po.id
+            JOIN suppliers s ON po.supplier_id = s.id
+            ${whereClause}`;
+
+        // Get paginated data
+        const dataSql = `
+            SELECT 
+                grn.*,
+                po.po_number,
+                s.name as supplier_name,
+                s.id as supplier_code,
+                u.full_name as received_by_name,
+                (
+                    SELECT COUNT(*) 
+                    FROM grn_items gi 
+                    WHERE gi.grn_id = grn.id
+                ) as item_count,
+                (
+                    SELECT SUM(gi.quantity_received) 
+                    FROM grn_items gi 
+                    WHERE gi.grn_id = grn.id
+                ) as total_quantity,
+                (
+                    SELECT SUM(gi.quantity_received * gi.unit_cost) 
+                    FROM grn_items gi 
+                    WHERE gi.grn_id = grn.id
+                ) as total_value
+            FROM goods_received_notes grn
+            JOIN purchase_orders po ON grn.po_id = po.id
+            JOIN suppliers s ON po.supplier_id = s.id
+            LEFT JOIN users u ON grn.received_by = u.id
+            ${whereClause}
+            ORDER BY grn.${sort_by} ${sort_order}
+            LIMIT ? OFFSET ?`;
+
+        return new Promise((resolve, reject) => {
+            db.get(countSql, params, (err, countResult) => {
+                if (err) {
+                    reject(err);
+                    return;
+                }
+
+                const queryParams = [...params, limit, offset];
+                db.all(dataSql, queryParams, (err, rows) => {
+                    if (err) {
+                        reject(err);
+                        return;
+                    }
+
+                    resolve({
+                        data: rows,
+                        total: countResult.total,
+                        page: page,
+                        limit: limit,
+                        total_pages: Math.ceil(countResult.total / limit)
+                    });
+                });
+            });
+        });
+    }
+
     static async generateGrnNumber() {
         const year = new Date().getFullYear().toString().slice(-2);
         const month = (new Date().getMonth() + 1).toString().padStart(2, '0');

@@ -1,14 +1,182 @@
 const GoodsReceivedNote = require('../models/GoodsReceivedNote');
 const PurchaseOrder = require('../models/PurchaseOrder');
+const db = require('../config/database');
 
 class GRNController {
     constructor() {
         // Bind methods to maintain context
         this.create = this.create.bind(this);
         this.getById = this.getById.bind(this);
+        this.getAll = this.getAll.bind(this);
         this.getByPoId = this.getByPoId.bind(this);
         this.getReceiptPreview = this.getReceiptPreview.bind(this);
         this.generateGrnNumber = this.generateGrnNumber.bind(this);
+    }
+
+    async getAll(req, res) {
+        try {
+            const {
+                page = 1,
+                limit = 20,
+                search,
+                status,
+                start_date,
+                end_date,
+                supplier_id,
+                po_number,
+                sort_by = 'receipt_date',
+                sort_order = 'DESC'
+            } = req.query;
+
+            const pageNum = parseInt(page);
+            const limitNum = parseInt(limit);
+            const offset = (pageNum - 1) * limitNum;
+
+            // Build WHERE clause
+            const whereConditions = [];
+            const params = [];
+
+            if (search) {
+                whereConditions.push(`
+                    (grn.grn_number LIKE ? OR 
+                     po.po_number LIKE ? OR 
+                     s.name LIKE ? OR 
+                     s.id LIKE ? OR 
+                     grn.supplier_invoice_number LIKE ? OR 
+                     grn.delivery_note_number LIKE ?)
+                `);
+                const searchTerm = `%${search}%`;
+                params.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
+            }
+
+            if (status) {
+                whereConditions.push('grn.status = ?');
+                params.push(status);
+            }
+
+            if (start_date) {
+                whereConditions.push('grn.receipt_date >= ?');
+                params.push(start_date);
+            }
+
+            if (end_date) {
+                whereConditions.push('grn.receipt_date <= ?');
+                params.push(end_date);
+            }
+
+            if (supplier_id) {
+                whereConditions.push('po.supplier_id = ?');
+                params.push(supplier_id);
+            }
+
+            if (po_number) {
+                whereConditions.push('po.po_number = ?');
+                params.push(po_number);
+            }
+
+            const whereClause = whereConditions.length > 0 
+                ? `WHERE ${whereConditions.join(' AND ')}` 
+                : '';
+
+            // Validate sort order
+            const validSortColumns = ['receipt_date', 'created_at', 'grn_number', 'po_number', 'supplier_name'];
+            const sortColumn = validSortColumns.includes(sort_by) ? sort_by : 'receipt_date';
+            const orderDirection = sort_order.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
+
+            // Count total records
+            const countSql = `
+                SELECT COUNT(*) as total
+                FROM goods_received_notes grn
+                JOIN purchase_orders po ON grn.po_id = po.id
+                JOIN suppliers s ON po.supplier_id = s.id
+                ${whereClause}`;
+
+            // Get paginated data
+            const dataSql = `
+                SELECT 
+                    grn.*,
+                    po.po_number,
+                    s.name as supplier_name,
+                    s.id as supplier_code,
+                    u.full_name as received_by_name,
+                    (
+                        SELECT COUNT(*) 
+                        FROM grn_items gi 
+                        WHERE gi.grn_id = grn.id
+                    ) as item_count,
+                    (
+                        SELECT SUM(gi.quantity_received) 
+                        FROM grn_items gi 
+                        WHERE gi.grn_id = grn.id
+                    ) as total_quantity,
+                    (
+                        SELECT SUM(gi.quantity_received * gi.unit_cost) 
+                        FROM grn_items gi 
+                        WHERE gi.grn_id = grn.id
+                    ) as total_value
+                FROM goods_received_notes grn
+                JOIN purchase_orders po ON grn.po_id = po.id
+                JOIN suppliers s ON po.supplier_id = s.id
+                LEFT JOIN users u ON grn.received_by = u.id
+                ${whereClause}
+                ORDER BY ${sortColumn} ${orderDirection}
+                LIMIT ? OFFSET ?`;
+
+            // Execute both queries
+            db.get(countSql, params, (err, countResult) => {
+                if (err) {
+                    console.error('Error counting GRNs:', err);
+                    return res.status(500).json({
+                        success: false,
+                        message: 'Failed to count GRNs',
+                        error: err.message
+                    });
+                }
+
+                const queryParams = [...params, limitNum, offset];
+                db.all(dataSql, queryParams, (err, rows) => {
+                    if (err) {
+                        console.error('Error fetching GRNs:', err);
+                        return res.status(500).json({
+                            success: false,
+                            message: 'Failed to fetch GRNs',
+                            error: err.message
+                        });
+                    }
+
+                    const totalPages = Math.ceil(countResult.total / limitNum);
+
+                    res.json({
+                        success: true,
+                        data: rows,
+                        pagination: {
+                            total: countResult.total,
+                            page: pageNum,
+                            limit: limitNum,
+                            total_pages: totalPages,
+                            has_next: pageNum < totalPages,
+                            has_prev: pageNum > 1
+                        },
+                        filters: {
+                            search,
+                            status,
+                            start_date,
+                            end_date,
+                            supplier_id,
+                            po_number
+                        }
+                    });
+                });
+            });
+
+        } catch (error) {
+            console.error('Error in getAll GRNs:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Failed to fetch GRNs',
+                error: error.message
+            });
+        }
     }
 
     async create(req, res) {
