@@ -17,6 +17,9 @@ router.get('/', (req, res) => grnController.getAll(req, res));
 // Create GRN
 router.post('/', (req, res) => grnController.create(req, res));
 
+router.patch('/:id', (req, res) => grnController.updateInvoice(req, res));
+
+
 // Get GRN by ID
 router.get('/:id', (req, res) => grnController.getById(req, res));
 

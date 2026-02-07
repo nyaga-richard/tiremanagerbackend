@@ -12,25 +12,7 @@ const db = new sqlite3.Database(dbPath, (err) => {
     }
 });
 
-async function initializeDatabase() {
-    try {
-        // Enable foreign keys
-        db.run('PRAGMA foreign_keys = ON');
-        
-        // First, let's check which tables exist and their schema
-        await createTables();
-        await addMissingColumns();
-        await createIndexes();
-        
-        console.log('Database initialization complete!');
-        db.close();
-    } catch (error) {
-        console.error('Database initialization error:', error);
-        db.close();
-    }
-}
-
-function runQuery(sql, params = []) {
+async function runQuery(sql, params = []) {
     return new Promise((resolve, reject) => {
         db.run(sql, params, function(err) {
             if (err) reject(err);
@@ -39,7 +21,7 @@ function runQuery(sql, params = []) {
     });
 }
 
-function getQuery(sql, params = []) {
+async function getQuery(sql, params = []) {
     return new Promise((resolve, reject) => {
         db.get(sql, params, (err, row) => {
             if (err) reject(err);
@@ -48,7 +30,7 @@ function getQuery(sql, params = []) {
     });
 }
 
-function allQuery(sql, params = []) {
+async function allQuery(sql, params = []) {
     return new Promise((resolve, reject) => {
         db.all(sql, params, (err, rows) => {
             if (err) reject(err);
@@ -150,7 +132,7 @@ async function createTables() {
             FOREIGN KEY (po_id) REFERENCES purchase_orders(id) ON DELETE CASCADE
         )`,
         
-        // Tires table - will add po_item_id column separately if needed
+        // Tires table
         `CREATE TABLE IF NOT EXISTS tires (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             serial_number TEXT UNIQUE NOT NULL,
@@ -170,6 +152,9 @@ async function createTables() {
             supplier_id INTEGER,
             purchase_date DATE,
             current_location TEXT,
+            po_item_id INTEGER REFERENCES purchase_order_items(id),
+            grn_id INTEGER REFERENCES goods_received_notes(id),
+            grn_item_id INTEGER REFERENCES grn_items(id),
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (supplier_id) REFERENCES suppliers(id)
@@ -220,7 +205,7 @@ async function createTables() {
             FOREIGN KEY (vehicle_id) REFERENCES vehicles(id)
         )`,
         
-        // Supplier ledger - will add po_id column separately if needed
+        // Supplier ledger
         `CREATE TABLE IF NOT EXISTS supplier_ledger (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             supplier_id INTEGER NOT NULL,
@@ -230,6 +215,9 @@ async function createTables() {
             amount REAL NOT NULL,
             reference_number TEXT,
             created_by TEXT,
+            po_id INTEGER REFERENCES purchase_orders(id),
+            grn_id INTEGER REFERENCES goods_received_notes(id),
+            accounting_transaction_id INTEGER REFERENCES accounting_transactions(id),
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (supplier_id) REFERENCES suppliers(id)
         )`,
@@ -251,7 +239,7 @@ async function createTables() {
             FOREIGN KEY (position_id) REFERENCES wheel_positions(id)
         )`,
         
-        // Tire movements - will add po_item_id column separately if needed
+        // Tire movements
         `CREATE TABLE IF NOT EXISTS tire_movements (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             tire_id INTEGER NOT NULL,
@@ -269,6 +257,8 @@ async function createTables() {
             )) NOT NULL,
             reference_id TEXT,
             reference_type TEXT,
+            po_item_id INTEGER REFERENCES purchase_order_items(id),
+            grn_id INTEGER REFERENCES goods_received_notes(id),
             user_id TEXT NOT NULL,
             notes TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -349,7 +339,6 @@ async function createTables() {
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         )`,
 
-
         `CREATE TABLE IF NOT EXISTS goods_received_notes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             grn_number TEXT UNIQUE NOT NULL,
@@ -381,6 +370,76 @@ async function createTables() {
             FOREIGN KEY (po_item_id) REFERENCES purchase_order_items(id)
         )`,
             
+        // Accounting tables
+        `CREATE TABLE IF NOT EXISTS accounting_transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            transaction_date DATE NOT NULL,
+            posting_date DATE NOT NULL,
+            transaction_number TEXT UNIQUE NOT NULL,
+            reference_number TEXT,
+            description TEXT NOT NULL,
+            transaction_type TEXT CHECK(transaction_type IN (
+                'PURCHASE_INVOICE',
+                'PAYMENT',
+                'JOURNAL_ENTRY',
+                'CREDIT_NOTE'
+            )) NOT NULL,
+            total_amount REAL NOT NULL,
+            currency TEXT DEFAULT 'USD',
+            status TEXT CHECK(status IN (
+                'DRAFT',
+                'POSTED',
+                'VOID',
+                'REVERSED'
+            )) DEFAULT 'DRAFT',
+            supplier_id INTEGER,
+            customer_id INTEGER,
+            related_grn_id INTEGER,
+            related_po_id INTEGER,
+            created_by INTEGER NOT NULL,
+            approved_by INTEGER,
+            posted_by INTEGER,
+            posted_date TIMESTAMP,
+            notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (supplier_id) REFERENCES suppliers(id) ON DELETE SET NULL,
+            FOREIGN KEY (related_grn_id) REFERENCES goods_received_notes(id) ON DELETE SET NULL,
+            FOREIGN KEY (related_po_id) REFERENCES purchase_orders(id) ON DELETE SET NULL,
+            FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+        )`,
+
+        `CREATE TABLE IF NOT EXISTS journal_entries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            transaction_id INTEGER NOT NULL,
+            account_code TEXT NOT NULL,
+            account_name TEXT NOT NULL,
+            debit REAL DEFAULT 0,
+            credit REAL DEFAULT 0,
+            description TEXT,
+            cost_center TEXT,
+            department TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (transaction_id) REFERENCES accounting_transactions(id) ON DELETE CASCADE
+        )`,
+
+        `CREATE TABLE IF NOT EXISTS chart_of_accounts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_code TEXT UNIQUE NOT NULL,
+            account_name TEXT NOT NULL,
+            account_type TEXT CHECK(account_type IN (
+                'ASSET',
+                'LIABILITY',
+                'EQUITY',
+                'REVENUE',
+                'EXPENSE'
+            )) NOT NULL,
+            sub_type TEXT,
+            normal_balance TEXT CHECK(normal_balance IN ('DEBIT', 'CREDIT')),
+            is_active BOOLEAN DEFAULT 1,
+            description TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )`
     ];
 
     for (let i = 0; i < tables.length; i++) {
@@ -398,14 +457,13 @@ async function addMissingColumns() {
     
     // List of columns to add if they don't exist
     const columnUpdates = [
-        { table: 'tire_movements', column: 'grn_id', definition: 'INTEGER REFERENCES goods_received_notes(id)' },
+        // Note: We removed most columns since they're now included in CREATE TABLE statements
+        { table: 'tires', column: 'po_item_id', definition: 'INTEGER REFERENCES purchase_order_items(id)' },
         { table: 'tires', column: 'grn_id', definition: 'INTEGER REFERENCES goods_received_notes(id)' },
         { table: 'tires', column: 'grn_item_id', definition: 'INTEGER REFERENCES grn_items(id)' },
-        { table: 'tires', column: 'po_item_id', definition: 'INTEGER REFERENCES purchase_order_items(id)' },
-        { table: 'supplier_ledger', column: 'po_id', definition: 'INTEGER REFERENCES purchase_orders(id)' },
         { table: 'tire_movements', column: 'po_item_id', definition: 'INTEGER REFERENCES purchase_order_items(id)' },
-        { table: 'purchase_orders', column: 'created_by', definition: 'INTEGER NOT NULL' },
-        { table: 'purchase_orders', column: 'approved_by', definition: 'INTEGER' }
+        { table: 'tire_movements', column: 'grn_id', definition: 'INTEGER REFERENCES goods_received_notes(id)' },
+        { table: 'supplier_ledger', column: 'accounting_transaction_id', definition: 'INTEGER REFERENCES accounting_transactions(id)' }
     ];
     
     for (const update of columnUpdates) {
@@ -436,11 +494,13 @@ async function createIndexes() {
         "CREATE INDEX IF NOT EXISTS idx_tires_status ON tires(status)",
         "CREATE INDEX IF NOT EXISTS idx_tires_size ON tires(size)",
         "CREATE INDEX IF NOT EXISTS idx_tires_po_item ON tires(po_item_id)",
+        "CREATE INDEX IF NOT EXISTS idx_tires_grn ON tires(grn_id)",
         
         // Movements indexes
         "CREATE INDEX IF NOT EXISTS idx_movements_tire ON tire_movements(tire_id)",
         "CREATE INDEX IF NOT EXISTS idx_movements_date ON tire_movements(movement_date)",
         "CREATE INDEX IF NOT EXISTS idx_movements_po_item ON tire_movements(po_item_id)",
+        "CREATE INDEX IF NOT EXISTS idx_movements_grn ON tire_movements(grn_id)",
         
         // Assignments indexes
         "CREATE INDEX IF NOT EXISTS idx_assignments_tire ON tire_assignments(tire_id)",
@@ -450,6 +510,8 @@ async function createIndexes() {
         // Supplier ledger indexes
         "CREATE INDEX IF NOT EXISTS idx_supplier_ledger ON supplier_ledger(supplier_id, date)",
         "CREATE INDEX IF NOT EXISTS idx_supplier_ledger_po ON supplier_ledger(po_id)",
+        "CREATE INDEX IF NOT EXISTS idx_supplier_ledger_grn ON supplier_ledger(grn_id)",
+        "CREATE INDEX IF NOT EXISTS idx_supplier_ledger_accounting ON supplier_ledger(accounting_transaction_id)",
         
         // Purchase orders indexes
         "CREATE INDEX IF NOT EXISTS idx_po_number ON purchase_orders(po_number)",
@@ -471,6 +533,16 @@ async function createIndexes() {
         "CREATE INDEX IF NOT EXISTS idx_po_receipts_po ON po_receipts(po_id)",
         "CREATE INDEX IF NOT EXISTS idx_po_receipts_item ON po_receipts(po_item_id)",
         
+        // GRN indexes
+        "CREATE INDEX IF NOT EXISTS idx_grn_number ON goods_received_notes(grn_number)",
+        "CREATE INDEX IF NOT EXISTS idx_grn_po ON goods_received_notes(po_id)",
+        "CREATE INDEX IF NOT EXISTS idx_grn_date ON goods_received_notes(receipt_date)",
+        "CREATE INDEX IF NOT EXISTS idx_grn_status ON goods_received_notes(status)",
+        
+        // GRN items indexes
+        "CREATE INDEX IF NOT EXISTS idx_grn_items_grn ON grn_items(grn_id)",
+        "CREATE INDEX IF NOT EXISTS idx_grn_items_po_item ON grn_items(po_item_id)",
+        
         // Users indexes
         "CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)",
         "CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)",
@@ -484,6 +556,7 @@ async function createIndexes() {
         // Suppliers indexes
         "CREATE INDEX IF NOT EXISTS idx_suppliers_name ON suppliers(name)",
         "CREATE INDEX IF NOT EXISTS idx_suppliers_type ON suppliers(type)",
+        "CREATE INDEX IF NOT EXISTS idx_suppliers_balance ON suppliers(balance)",
         
         // Vehicles indexes
         "CREATE INDEX IF NOT EXISTS idx_vehicles_number ON vehicles(vehicle_number)",
@@ -499,7 +572,22 @@ async function createIndexes() {
         
         // Password resets indexes
         "CREATE INDEX IF NOT EXISTS idx_password_resets_token ON password_resets(token)",
-        "CREATE INDEX IF NOT EXISTS idx_password_resets_user ON password_resets(user_id)"
+        "CREATE INDEX IF NOT EXISTS idx_password_resets_user ON password_resets(user_id)",
+        
+        // Accounting transaction indexes
+        "CREATE INDEX IF NOT EXISTS idx_accounting_transactions_supplier ON accounting_transactions(supplier_id)",
+        "CREATE INDEX IF NOT EXISTS idx_accounting_transactions_grn ON accounting_transactions(related_grn_id)",
+        "CREATE INDEX IF NOT EXISTS idx_accounting_transactions_date ON accounting_transactions(transaction_date)",
+        "CREATE INDEX IF NOT EXISTS idx_accounting_transactions_number ON accounting_transactions(transaction_number)",
+        "CREATE INDEX IF NOT EXISTS idx_accounting_transactions_type ON accounting_transactions(transaction_type)",
+        
+        // Journal entries indexes
+        "CREATE INDEX IF NOT EXISTS idx_journal_entries_transaction ON journal_entries(transaction_id)",
+        "CREATE INDEX IF NOT EXISTS idx_journal_entries_account ON journal_entries(account_code)",
+        
+        // Chart of accounts indexes
+        "CREATE INDEX IF NOT EXISTS idx_chart_accounts_code ON chart_of_accounts(account_code)",
+        "CREATE INDEX IF NOT EXISTS idx_chart_accounts_type ON chart_of_accounts(account_type)"
     ];
 
     for (let i = 0; i < indexes.length; i++) {
@@ -509,5 +597,127 @@ async function createIndexes() {
         } catch (error) {
             console.error(`Error creating index ${i + 1}: ${error.message}`);
         }
+    }
+}
+
+// Initialize sample chart of accounts
+async function initializeChartOfAccounts() {
+    console.log('\nInitializing chart of accounts...');
+    
+    const accounts = [
+        // Assets
+        { code: '1000', name: 'Cash', type: 'ASSET', normal_balance: 'DEBIT', description: 'Cash in bank' },
+        { code: '1100', name: 'Accounts Receivable', type: 'ASSET', normal_balance: 'DEBIT', description: 'Amounts owed by customers' },
+        { code: '1200', name: 'Inventory', type: 'ASSET', normal_balance: 'DEBIT', description: 'Tire inventory' },
+        { code: '1300', name: 'Prepaid Expenses', type: 'ASSET', normal_balance: 'DEBIT', description: 'Prepaid items' },
+        
+        // Liabilities
+        { code: '2000', name: 'Accounts Payable', type: 'LIABILITY', normal_balance: 'CREDIT', description: 'Amounts owed to suppliers' },
+        { code: '2100', name: 'Accrued Expenses', type: 'LIABILITY', normal_balance: 'CREDIT', description: 'Accrued liabilities' },
+        { code: '2200', name: 'Tax Payable', type: 'LIABILITY', normal_balance: 'CREDIT', description: 'Taxes payable' },
+        
+        // Equity
+        { code: '3000', name: 'Owner\'s Equity', type: 'EQUITY', normal_balance: 'CREDIT', description: 'Owner capital' },
+        { code: '3100', name: 'Retained Earnings', type: 'EQUITY', normal_balance: 'CREDIT', description: 'Accumulated profits' },
+        
+        // Revenue
+        { code: '4000', name: 'Sales Revenue', type: 'REVENUE', normal_balance: 'CREDIT', description: 'Revenue from sales' },
+        { code: '4100', name: 'Service Revenue', type: 'REVENUE', normal_balance: 'CREDIT', description: 'Revenue from services' },
+        
+        // Expenses
+        { code: '5000', name: 'Cost of Goods Sold', type: 'EXPENSE', normal_balance: 'DEBIT', description: 'Cost of inventory sold' },
+        { code: '5100', name: 'Purchases', type: 'EXPENSE', normal_balance: 'DEBIT', description: 'Purchase of tires' },
+        { code: '5200', name: 'Shipping Expense', type: 'EXPENSE', normal_balance: 'DEBIT', description: 'Shipping costs' },
+        { code: '5300', name: 'Salaries Expense', type: 'EXPENSE', normal_balance: 'DEBIT', description: 'Employee salaries' },
+        { code: '5400', name: 'Rent Expense', type: 'EXPENSE', normal_balance: 'DEBIT', description: 'Rent payments' },
+        { code: '5500', name: 'Utilities Expense', type: 'EXPENSE', normal_balance: 'DEBIT', description: 'Utility bills' },
+        { code: '5600', name: 'Depreciation Expense', type: 'EXPENSE', normal_balance: 'DEBIT', description: 'Asset depreciation' },
+        { code: '5700', name: 'Interest Expense', type: 'EXPENSE', normal_balance: 'DEBIT', description: 'Interest payments' }
+    ];
+
+    for (const account of accounts) {
+        try {
+            const sql = `
+                INSERT OR IGNORE INTO chart_of_accounts 
+                (account_code, account_name, account_type, normal_balance, description)
+                VALUES (?, ?, ?, ?, ?)`;
+            
+            await runQuery(sql, [
+                account.code,
+                account.name,
+                account.type,
+                account.normal_balance,
+                account.description
+            ]);
+            console.log(`✓ Account ${account.code} - ${account.name} initialized`);
+        } catch (error) {
+            console.error(`Error initializing account ${account.code}:`, error.message);
+        }
+    }
+}
+
+// Initialize sample roles and admin user
+async function initializeSampleData() {
+    console.log('\nInitializing sample data...');
+    
+    try {
+        // Create admin role
+        const adminRoleSql = `
+            INSERT OR IGNORE INTO roles (name, description, is_system_role) 
+            VALUES ('Admin', 'System Administrator', 1)`;
+        await runQuery(adminRoleSql);
+        
+        // Get admin role ID
+        const role = await getQuery("SELECT id FROM roles WHERE name = 'Admin'");
+        
+        if (role) {
+            // Create admin user (default password: admin123)
+            const adminUserSql = `
+                INSERT OR IGNORE INTO users 
+                (username, email, password_hash, full_name, role_id, is_active)
+                VALUES (?, ?, ?, ?, ?, 1)`;
+            
+            // Hash for 'admin123'
+            const hashedPassword = '$2b$10$N9qo8uLOickgx2ZMRZoMye9.Z.7H.3Q5J9z7Kz.8Qz8z8z8z8z8z8';
+            
+            await runQuery(adminUserSql, [
+                'admin',
+                'admin@tiremanager.com',
+                hashedPassword,
+                'System Administrator',
+                role.id
+            ]);
+            
+            console.log('✓ Admin user created (username: admin, password: admin123)');
+        }
+    } catch (error) {
+        console.error('Error initializing sample data:', error.message);
+    }
+}
+
+async function initializeDatabase() {
+    try {
+        // Enable foreign keys
+        await runQuery('PRAGMA foreign_keys = ON');
+        
+        // Create tables
+        await createTables();
+        await addMissingColumns();
+        await createIndexes();
+        await initializeChartOfAccounts();
+        await initializeSampleData();
+        
+        console.log('\n✅ Database initialization complete!');
+    } catch (error) {
+        console.error('❌ Database initialization error:', error);
+    } finally {
+        // Close database connection
+        db.close((err) => {
+            if (err) {
+                console.error('Error closing database:', err);
+            } else {
+                console.log('Database connection closed.');
+            }
+        });
     }
 }

@@ -143,6 +143,113 @@ class Supplier {
         });
     }
 
+    static async addLedgerEntry(ledgerData) {
+        const {
+            supplier_id,
+            date,
+            description,
+            transaction_type,
+            amount,
+            reference_number,
+            po_id,
+            grn_id,
+            accounting_transaction_id,
+            created_by
+        } = ledgerData;
+
+        const sql = `
+            INSERT INTO supplier_ledger (
+                supplier_id, date, description,
+                transaction_type, amount, reference_number,
+                po_id, grn_id, accounting_transaction_id, created_by
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+
+        return new Promise((resolve, reject) => {
+            db.run(sql, [
+                supplier_id,
+                date,
+                description,
+                transaction_type,
+                amount,
+                reference_number,
+                po_id,
+                grn_id,
+                accounting_transaction_id,
+                created_by
+            ], function(err) {
+                if (err) reject(err);
+                else {
+                    // Update supplier balance
+                    const updateSql = `
+                        UPDATE suppliers 
+                        SET balance = CASE 
+                            WHEN ? IN ('PURCHASE', 'RETREAD_SERVICE') THEN balance + ?
+                            WHEN ? = 'PAYMENT' THEN balance - ?
+                            ELSE balance
+                        END
+                        WHERE id = ?`;
+
+                    db.run(updateSql, [
+                        transaction_type,
+                        amount,
+                        transaction_type,
+                        amount,
+                        supplier_id
+                    ], function(err) {
+                        if (err) reject(err);
+                        else resolve(this.lastID);
+                    });
+                }
+            });
+        });
+    }
+
+    static async getBalance(supplierId) {
+        const sql = `
+            SELECT balance FROM suppliers WHERE id = ?`;
+
+        return new Promise((resolve, reject) => {
+            db.get(sql, [supplierId], (err, row) => {
+                if (err) reject(err);
+                else resolve(row ? row.balance : 0);
+            });
+        });
+    }
+
+    static async getLedger(supplierId, startDate, endDate) {
+        let sql = `
+            SELECT sl.*, 
+                   at.transaction_number,
+                   grn.grn_number,
+                   po.po_number
+            FROM supplier_ledger sl
+            LEFT JOIN accounting_transactions at ON sl.accounting_transaction_id = at.id
+            LEFT JOIN goods_received_notes grn ON sl.grn_id = grn.id
+            LEFT JOIN purchase_orders po ON sl.po_id = po.id
+            WHERE sl.supplier_id = ?`;
+        
+        const params = [supplierId];
+        
+        if (startDate) {
+            sql += ' AND sl.date >= ?';
+            params.push(startDate);
+        }
+        
+        if (endDate) {
+            sql += ' AND sl.date <= ?';
+            params.push(endDate);
+        }
+        
+        sql += ' ORDER BY sl.date DESC, sl.id DESC';
+        
+        return new Promise((resolve, reject) => {
+            db.all(sql, params, (err, rows) => {
+                if (err) reject(err);
+                else resolve(rows);
+            });
+        });
+    }
+
     static async getSupplierBalance(supplierId) {
         const sql = `
             SELECT 

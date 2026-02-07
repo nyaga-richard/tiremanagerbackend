@@ -481,6 +481,32 @@ class GRNController {
         }
     }
 
+    async updateInvoice(req, res) {
+        try {
+            const { id } = req.params;
+            const {
+            supplier_invoice_number,
+            accounting_transaction_id
+            } = req.body;
+
+            if (!supplier_invoice_number || !accounting_transaction_id) {
+            return res.status(400).json({ message: "Missing required fields" });
+            }
+
+            await this.grnModel.updateInvoice(id, {
+            supplier_invoice_number,
+            accounting_transaction_id,
+            invoice_status: "POSTED"
+            });
+
+            res.json({ success: true });
+        } catch (err) {
+            console.error("GRN invoice update failed:", err);
+            res.status(500).json({ message: "Failed to update GRN" });
+        }
+        }
+
+
     async generateGrnNumber(req, res) {
         try {
             const grnNumber = await GoodsReceivedNote.generateGrnNumber();

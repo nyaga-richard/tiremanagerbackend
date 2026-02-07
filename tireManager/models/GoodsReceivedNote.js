@@ -480,6 +480,21 @@ class GoodsReceivedNote {
         });
     }
 
+    // Add this method to your existing GoodsReceivedNote model
+    static async updateInvoiceNumber(grnId, invoiceNumber) {
+        const sql = `
+            UPDATE goods_received_notes 
+            SET supplier_invoice_number = ?
+                
+            WHERE id = ?`;
+
+        return new Promise((resolve, reject) => {
+            db.run(sql, [invoiceNumber, grnId], function(err) {
+                if (err) reject(err);
+                else resolve(this.changes);
+            });
+        });
+    }
     static async updateInventory(grnId) {
         const sql = `
             INSERT OR REPLACE INTO inventory_catalog 
