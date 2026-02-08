@@ -88,7 +88,7 @@ class TireController {
 
             // 1️⃣ Validate tire
             const tire = await Tire.findById(tire_id);
-            if (!tire || tire.status !== 'IN_STORE') {
+            if (!tire) {
                 return res.status(400).json({ error: 'Tire not available for installation' });
             }
 
