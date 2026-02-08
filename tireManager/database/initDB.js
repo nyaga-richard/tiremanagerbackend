@@ -1,5 +1,6 @@
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
+const { getAllPermissions,DEFAULT_ROLE_PERMISSIONS, SYSTEM_ROLES } = require('../config/permissions-config');
 
 // Create database connection
 const dbPath = path.join(__dirname, '..', 'database', 'tires.db');
@@ -656,6 +657,87 @@ async function initializeChartOfAccounts() {
     }
 }
 
+// In your existing database.js file, update the initializeSampleData function:
+
+async function seedPermissions() {
+    console.log('\nSeeding permissions...');
+    
+    const permissions = getAllPermissions();
+    
+    for (const perm of permissions) {
+        try {
+            const sql = `
+                INSERT OR IGNORE INTO permissions 
+                (category, code, name, description)
+                VALUES (?, ?, ?, ?)`;
+            
+            await runQuery(sql, [
+                perm.category,
+                perm.code,
+                perm.name,
+                `Permission to ${perm.name.toLowerCase()}`
+            ]);
+            console.log(`✓ Permission ${perm.code} seeded`);
+        } catch (error) {
+            console.error(`Error seeding permission ${perm.code}:`, error.message);
+        }
+    }
+}
+
+async function initializeSystemRolesAndPermissions() {
+    console.log('\nInitializing system roles and permissions...');
+    
+    try {
+        // Create system roles
+        for (const [key, roleName] of Object.entries(SYSTEM_ROLES)) {
+            const isSystemRole = key !== 'VIEWER'; // All except viewer are system roles
+            const roleSql = `
+                INSERT OR IGNORE INTO roles (name, description, is_system_role) 
+                VALUES (?, ?, ?)`;
+            
+            await runQuery(roleSql, [
+                roleName,
+                `System role: ${roleName}`,
+                isSystemRole ? 1 : 0
+            ]);
+            console.log(`✓ Role ${roleName} created`);
+            
+            // If this role has default permissions, assign them
+            if (DEFAULT_ROLE_PERMISSIONS[roleName]) {
+                const role = await getQuery("SELECT id FROM roles WHERE name = ?", [roleName]);
+                const defaultPerms = DEFAULT_ROLE_PERMISSIONS[roleName]();
+                
+                for (const perm of defaultPerms) {
+                    const permission = await getQuery(
+                        "SELECT id FROM permissions WHERE code = ?", 
+                        [perm.permission_code]
+                    );
+                    
+                    if (permission) {
+                        const rolePermSql = `
+                            INSERT OR REPLACE INTO role_permissions 
+                            (role_id, permission_id, can_view, can_create, can_edit, can_delete, can_approve)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)`;
+                        
+                        await runQuery(rolePermSql, [
+                            role.id,
+                            permission.id,
+                            perm.can_view,
+                            perm.can_create,
+                            perm.can_edit,
+                            perm.can_delete,
+                            perm.can_approve
+                        ]);
+                    }
+                }
+                console.log(`  ✓ Default permissions assigned to ${roleName}`);
+            }
+        }
+    } catch (error) {
+        console.error('Error initializing system roles:', error.message);
+    }
+}
+
 // Initialize sample roles and admin user
 async function initializeSampleData() {
     console.log('\nInitializing sample data...');
@@ -706,6 +788,8 @@ async function initializeDatabase() {
         await createIndexes();
         await initializeChartOfAccounts();
         await initializeSampleData();
+        await seedPermissions();
+        await initializeSystemRolesAndPermissions();
         
         console.log('\n✅ Database initialization complete!');
     } catch (error) {

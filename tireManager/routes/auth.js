@@ -1,24 +1,24 @@
 const express = require('express');
 const router = express.Router();
-const bcrypt = require('bcrypt');
-const jwt = require('jsonwebtoken');
-const { v4: uuidv4 } = require('uuid');
 const AuthMiddleware = require('../middleware/auth-middleware');
-const { PERMISSIONS } = require('../models/permissions');
 
 // Initialize auth middleware
 const db = require('../config/database');
 const auth = new AuthMiddleware(db);
+
+// =============== AUTHENTICATION ROUTES ===============
 
 // User login
 router.post('/login', async (req, res) => {
     try {
         const { username, password, rememberMe } = req.body;
         
+        // Input validation
         if (!username || !password) {
             return res.status(400).json({ 
                 success: false, 
-                error: 'Username and password are required' 
+                error: 'Username and password are required',
+                code: 'MISSING_CREDENTIALS'
             });
         }
 
@@ -40,37 +40,64 @@ router.post('/login', async (req, res) => {
         });
         
         if (!user) {
+            // Log failed login attempt
+            await auth.logAudit(
+                null, 
+                'LOGIN_FAILED', 
+                'AUTH', 
+                null, 
+                null, 
+                { 
+                    username, 
+                    reason: 'User not found',
+                    ip: req.ip 
+                }, 
+                req
+            );
+            
             return res.status(401).json({ 
                 success: false, 
-                error: 'Invalid username or password' 
+                error: 'Invalid username or password',
+                code: 'INVALID_CREDENTIALS'
             });
         }
         
         // Verify password
         const isValid = await auth.verifyPassword(password, user.password_hash);
         if (!isValid) {
+            // Log failed login attempt
+            await auth.logAudit(
+                user.id, 
+                'LOGIN_FAILED', 
+                'AUTH', 
+                user.id, 
+                null, 
+                { 
+                    username, 
+                    reason: 'Invalid password',
+                    ip: req.ip 
+                }, 
+                req
+            );
+            
             return res.status(401).json({ 
                 success: false, 
-                error: 'Invalid username or password' 
+                error: 'Invalid username or password',
+                code: 'INVALID_CREDENTIALS'
             });
         }
         
         // Get user permissions
         const permissions = await auth.getUserPermissions(user.id);
         
-        // Generate token with custom expiry
-        const tokenExpiry = rememberMe ? '7d' : '24h';
-        const token = jwt.sign(
-            {
-                id: user.id,
-                username: user.username,
-                role: user.role_name,
-                role_id: user.role_id,
-                permissions: permissions
-            },
-            process.env.JWT_SECRET ,
-            { expiresIn: tokenExpiry }
-        );
+        // Generate token
+        const token = await auth.generateToken(user);
+        
+        // Generate refresh token if rememberMe is enabled
+        let refreshToken = null;
+        if (rememberMe) {
+            refreshToken = auth.generateRefreshToken(user.id);
+        }
         
         // Create session
         const session = await auth.createSession(
@@ -80,33 +107,62 @@ router.post('/login', async (req, res) => {
         );
         
         // Update last login
-        db.run('UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?', [user.id]);
+        await auth.updateLastLogin(user.id);
         
-        // Log login
+        // Log successful login
         await auth.logAudit(
             user.id, 
-            'LOGIN', 
-            'user', 
+            'LOGIN_SUCCESS', 
+            'AUTH', 
             user.id, 
             null, 
-            { login_time: new Date().toISOString() }, 
+            { 
+                session_id: session.sessionId,
+                device: req.headers['user-agent'],
+                remember_me: rememberMe || false 
+            }, 
             req
         );
         
-        const cookieMaxAge = rememberMe
-        ? 7 * 24 * 60 * 60 * 1000   // 7 days
-        : 24 * 60 * 60 * 1000;     // 24 hours
-
-        res.cookie("auth_token", token, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "lax", // IMPORTANT
-        maxAge: cookieMaxAge,
+        // Set cookie options
+        const cookieOptions = {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: 'lax',
+            path: '/'
+        };
+        
+        // Set auth cookie
+        res.cookie('auth_token', token, {
+            ...cookieOptions,
+            maxAge: rememberMe ? 7 * 24 * 60 * 60 * 1000 : 24 * 60 * 60 * 1000
         });
-
+        
+        // Set refresh token cookie if rememberMe
+        if (refreshToken) {
+            res.cookie('refresh_token', refreshToken, {
+                ...cookieOptions,
+                maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+                path: '/api/auth/refresh' // Only accessible to refresh endpoint
+            });
+        }
+        
+        // Prepare permission map for frontend
+        const permissionMap = {};
+        permissions.forEach(perm => {
+            permissionMap[perm.code] = {
+                can_view: perm.can_view === 1,
+                can_create: perm.can_create === 1,
+                can_edit: perm.can_edit === 1,
+                can_delete: perm.can_delete === 1,
+                can_approve: perm.can_approve === 1
+            };
+        });
+        
         res.json({
             success: true,
             token,
+            refreshToken,
             user: {
                 id: user.id,
                 username: user.username,
@@ -115,23 +171,81 @@ router.post('/login', async (req, res) => {
                 role: user.role_name,
                 role_id: user.role_id,
                 department: user.department,
-                permissions: permissions.map(p => ({
-                    code: p.code,
-                    can_view: p.can_view,
-                    can_create: p.can_create,
-                    can_edit: p.can_edit,
-                    can_delete: p.can_delete,
-                    can_approve: p.can_approve
-                }))
+                last_login: user.last_login,
+                created_at: user.created_at
+            },
+            permissions: permissionMap,
+            session: {
+                id: session.sessionId,
+                expires_at: session.expiresAt
             }
         });
-
-    
+        
     } catch (error) {
         console.error('Login error:', error);
+        
+        // Log the error
+        await auth.logAudit(
+            null, 
+            'LOGIN_ERROR', 
+            'AUTH', 
+            null, 
+            null, 
+            { 
+                error: error.message,
+                stack: error.stack 
+            }, 
+            req
+        );
+        
         res.status(500).json({ 
             success: false, 
-            error: 'Login failed. Please try again.' 
+            error: 'Login failed. Please try again.',
+            code: 'LOGIN_FAILED'
+        });
+    }
+});
+
+// Refresh token endpoint
+router.post('/refresh', async (req, res) => {
+    try {
+        const refreshToken = req.cookies?.refresh_token || req.body.refreshToken;
+        
+        if (!refreshToken) {
+            return res.status(400).json({ 
+                success: false, 
+                error: 'Refresh token required',
+                code: 'MISSING_REFRESH_TOKEN'
+            });
+        }
+        
+        const tokens = await auth.refreshAccessToken(refreshToken);
+        
+        // Set new auth cookie
+        res.cookie('auth_token', tokens.accessToken, {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: 'lax',
+            maxAge: 24 * 60 * 60 * 1000 // 24 hours
+        });
+        
+        res.json({
+            success: true,
+            token: tokens.accessToken,
+            expiresIn: tokens.expiresIn
+        });
+        
+    } catch (error) {
+        console.error('Token refresh error:', error);
+        
+        // Clear invalid tokens
+        res.clearCookie('auth_token');
+        res.clearCookie('refresh_token');
+        
+        res.status(401).json({ 
+            success: false, 
+            error: 'Session expired. Please login again.',
+            code: 'SESSION_EXPIRED'
         });
     }
 });
@@ -139,34 +253,36 @@ router.post('/login', async (req, res) => {
 // User logout
 router.post('/logout', auth.authenticate, async (req, res) => {
     try {
-        // Invalidate active sessions for this user (optional but recommended)
-        db.run(
-            `
-            UPDATE user_sessions 
-            SET is_active = 0 
-            WHERE user_id = ? AND is_active = 1
-            `,
-            [req.user.id],
-            () => {}
-        );
-
+        const token = auth.extractToken(req);
+        
+        // Invalidate the specific session
+        if (token) {
+            await auth.invalidateSession(token);
+        }
+        
         // Log logout
         await auth.logAudit(
             req.user.id,
             'LOGOUT',
-            'user',
+            'AUTH',
             req.user.id,
             null,
-            { logout_time: new Date().toISOString() },
+            { 
+                logout_time: new Date().toISOString(),
+                session_invalidated: true 
+            },
             req
         );
 
-        // Clear auth cookie
-        res.clearCookie("auth_token", {
+        // Clear cookies
+        const clearOptions = {
             httpOnly: true,
-            secure: process.env.NODE_ENV === "production",
-            sameSite: "lax",
-        });
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: 'lax'
+        };
+        
+        res.clearCookie('auth_token', clearOptions);
+        res.clearCookie('refresh_token', { ...clearOptions, path: '/api/auth/refresh' });
 
         res.json({
             success: true,
@@ -175,13 +291,20 @@ router.post('/logout', auth.authenticate, async (req, res) => {
 
     } catch (error) {
         console.error('Logout error:', error);
+        
+        // Still try to clear cookies on error
+        res.clearCookie('auth_token');
+        res.clearCookie('refresh_token');
+        
         res.status(500).json({
             success: false,
-            error: 'Logout failed'
+            error: 'Logout failed',
+            code: 'LOGOUT_FAILED'
         });
     }
 });
 
+// =============== USER PROFILE ROUTES ===============
 
 // Get current user profile
 router.get('/profile', auth.authenticate, async (req, res) => {
@@ -196,8 +319,10 @@ router.get('/profile', auth.authenticate, async (req, res) => {
                     u.department,
                     u.last_login,
                     u.created_at,
+                    u.updated_at,
                     r.name as role_name,
-                    r.description as role_description
+                    r.description as role_description,
+                    r.is_system_role
                 FROM users u
                 LEFT JOIN roles r ON u.role_id = r.id
                 WHERE u.id = ? AND u.is_active = 1
@@ -210,31 +335,38 @@ router.get('/profile', auth.authenticate, async (req, res) => {
         if (!user) {
             return res.status(404).json({ 
                 success: false, 
-                error: 'User not found' 
+                error: 'User not found',
+                code: 'USER_NOT_FOUND'
             });
         }
         
         const permissions = await auth.getUserPermissions(req.user.id);
         
+        // Create permission map
+        const permissionMap = {};
+        permissions.forEach(perm => {
+            permissionMap[perm.code] = {
+                can_view: perm.can_view === 1,
+                can_create: perm.can_create === 1,
+                can_edit: perm.can_edit === 1,
+                can_delete: perm.can_delete === 1,
+                can_approve: perm.can_approve === 1
+            };
+        });
+        
         res.json({
             success: true,
             user: {
                 ...user,
-                permissions: permissions.map(p => ({
-                    code: p.code,
-                    can_view: p.can_view,
-                    can_create: p.can_create,
-                    can_edit: p.can_edit,
-                    can_delete: p.can_delete,
-                    can_approve: p.can_approve
-                }))
+                permissions: permissionMap
             }
         });
     } catch (error) {
         console.error('Profile error:', error);
         res.status(500).json({ 
             success: false, 
-            error: 'Failed to get profile' 
+            error: 'Failed to get profile',
+            code: 'PROFILE_FETCH_ERROR'
         });
     }
 });
@@ -244,6 +376,45 @@ router.put('/profile', auth.authenticate, async (req, res) => {
     try {
         const { full_name, email, department } = req.body;
         const userId = req.user.id;
+        
+        // Validation
+        if (!full_name || !email) {
+            return res.status(400).json({ 
+                success: false, 
+                error: 'Full name and email are required',
+                code: 'MISSING_FIELDS'
+            });
+        }
+        
+        // Email validation
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(email)) {
+            return res.status(400).json({ 
+                success: false, 
+                error: 'Invalid email format',
+                code: 'INVALID_EMAIL'
+            });
+        }
+        
+        // Check if email already exists (excluding current user)
+        const emailExists = await new Promise((resolve, reject) => {
+            db.get(
+                'SELECT id FROM users WHERE email = ? AND id != ?',
+                [email, userId],
+                (err, row) => {
+                    if (err) reject(err);
+                    else resolve(!!row);
+                }
+            );
+        });
+        
+        if (emailExists) {
+            return res.status(400).json({ 
+                success: false, 
+                error: 'Email already in use by another account',
+                code: 'EMAIL_EXISTS'
+            });
+        }
         
         // Get current user data
         const currentUser = await new Promise((resolve, reject) => {
@@ -259,7 +430,7 @@ router.put('/profile', auth.authenticate, async (req, res) => {
                 UPDATE users 
                 SET full_name = ?, email = ?, department = ?, updated_at = CURRENT_TIMESTAMP 
                 WHERE id = ?
-            `, [full_name, email, department, userId], function(err) {
+            `, [full_name, email, department || null, userId], function(err) {
                 if (err) reject(err);
                 else resolve(this.changes);
             });
@@ -269,7 +440,7 @@ router.put('/profile', auth.authenticate, async (req, res) => {
         await auth.logAudit(
             userId, 
             'UPDATE_PROFILE', 
-            'user', 
+            'USER', 
             userId, 
             { 
                 full_name: currentUser.full_name, 
@@ -288,7 +459,8 @@ router.put('/profile', auth.authenticate, async (req, res) => {
         console.error('Update profile error:', error);
         res.status(500).json({ 
             success: false, 
-            error: 'Failed to update profile' 
+            error: 'Failed to update profile',
+            code: 'PROFILE_UPDATE_ERROR'
         });
     }
 });
@@ -296,20 +468,33 @@ router.put('/profile', auth.authenticate, async (req, res) => {
 // Change password
 router.post('/change-password', auth.authenticate, async (req, res) => {
     try {
-        const { currentPassword, newPassword } = req.body;
+        const { currentPassword, newPassword, confirmPassword } = req.body;
         const userId = req.user.id;
         
-        if (!currentPassword || !newPassword) {
+        // Validation
+        if (!currentPassword || !newPassword || !confirmPassword) {
             return res.status(400).json({ 
                 success: false, 
-                error: 'Current and new passwords are required' 
+                error: 'All password fields are required',
+                code: 'MISSING_PASSWORD_FIELDS'
             });
         }
         
-        if (newPassword.length < 8) {
+        if (newPassword !== confirmPassword) {
             return res.status(400).json({ 
                 success: false, 
-                error: 'New password must be at least 8 characters long' 
+                error: 'New password and confirmation do not match',
+                code: 'PASSWORD_MISMATCH'
+            });
+        }
+        
+        // Password strength validation
+        const strengthCheck = auth.validatePasswordStrength(newPassword);
+        if (!strengthCheck.valid) {
+            return res.status(400).json({ 
+                success: false, 
+                error: strengthCheck.message,
+                code: 'WEAK_PASSWORD'
             });
         }
         
@@ -326,7 +511,8 @@ router.post('/change-password', auth.authenticate, async (req, res) => {
         if (!isValid) {
             return res.status(401).json({ 
                 success: false, 
-                error: 'Current password is incorrect' 
+                error: 'Current password is incorrect',
+                code: 'INCORRECT_CURRENT_PASSWORD'
             });
         }
         
@@ -345,590 +531,66 @@ router.post('/change-password', auth.authenticate, async (req, res) => {
             );
         });
         
+        // Invalidate all other sessions for security
+        await auth.invalidateAllUserSessions(userId);
+        
         // Log password change
         await auth.logAudit(
             userId, 
             'CHANGE_PASSWORD', 
-            'user', 
+            'USER', 
             userId, 
             null, 
-            { password_changed: true }, 
+            { 
+                password_changed: true,
+                sessions_invalidated: true 
+            }, 
             req
         );
         
         res.json({ 
             success: true, 
-            message: 'Password changed successfully' 
+            message: 'Password changed successfully. Please login again.' 
         });
     } catch (error) {
         console.error('Change password error:', error);
         res.status(500).json({ 
             success: false, 
-            error: 'Failed to change password' 
+            error: 'Failed to change password',
+            code: 'PASSWORD_CHANGE_ERROR'
         });
     }
 });
-
-// Get all users (Admin only)
-router.get('/users', 
-    auth.authenticate, 
-    auth.checkPermission(PERMISSIONS.USER_MANAGEMENT.VIEW, 'view'),
-    async (req, res) => {
-        try {
-            const { page = 1, limit = 20, search = '', role = '' } = req.query;
-            const offset = (page - 1) * limit;
-            
-            let query = `
-                SELECT 
-                    u.id, 
-                    u.username, 
-                    u.email, 
-                    u.full_name, 
-                    u.department,
-                    u.is_active,
-                    u.last_login,
-                    u.created_at,
-                    r.name as role_name,
-                    r.id as role_id
-                FROM users u
-                LEFT JOIN roles r ON u.role_id = r.id
-                WHERE 1=1
-            `;
-            
-            const params = [];
-            
-            if (search) {
-                query += ` AND (
-                    u.username LIKE ? OR 
-                    u.email LIKE ? OR 
-                    u.full_name LIKE ?
-                )`;
-                const searchParam = `%${search}%`;
-                params.push(searchParam, searchParam, searchParam);
-            }
-            
-            if (role) {
-                query += ` AND r.name = ?`;
-                params.push(role);
-            }
-            
-            // Get total count
-            const countQuery = query.replace(
-                'SELECT u.id, u.username, u.email, u.full_name, u.department, u.is_active, u.last_login, u.created_at, r.name as role_name, r.id as role_id',
-                'SELECT COUNT(*) as total'
-            );
-            
-            const totalResult = await new Promise((resolve, reject) => {
-                db.get(countQuery, params, (err, row) => {
-                    if (err) reject(err);
-                    else resolve(row);
-                });
-            });
-            
-            // Get paginated results
-            query += ` ORDER BY u.created_at DESC LIMIT ? OFFSET ?`;
-            params.push(limit, offset);
-            
-            const users = await new Promise((resolve, reject) => {
-                db.all(query, params, (err, rows) => {
-                    if (err) reject(err);
-                    else resolve(rows);
-                });
-            });
-            
-            res.json({
-                success: true,
-                users,
-                pagination: {
-                    page: parseInt(page),
-                    limit: parseInt(limit),
-                    total: totalResult.total,
-                    pages: Math.ceil(totalResult.total / limit)
-                }
-            });
-        } catch (error) {
-            console.error('Get users error:', error);
-            res.status(500).json({ 
-                success: false, 
-                error: 'Failed to get users' 
-            });
-        }
-    }
-);
-
-// Get user by ID
-router.get('/users/:id', 
-    auth.authenticate, 
-    auth.checkPermission(PERMISSIONS.USER_MANAGEMENT.VIEW, 'view'),
-    async (req, res) => {
-        try {
-            const userId = req.params.id;
-            
-            const user = await new Promise((resolve, reject) => {
-                db.get(`
-                    SELECT 
-                        u.*,
-                        r.name as role_name,
-                        r.description as role_description
-                    FROM users u
-                    LEFT JOIN roles r ON u.role_id = r.id
-                    WHERE u.id = ?
-                `, [userId], (err, row) => {
-                    if (err) reject(err);
-                    else resolve(row);
-                });
-            });
-            
-            if (!user) {
-                return res.status(404).json({ 
-                    success: false, 
-                    error: 'User not found' 
-                });
-            }
-            
-            const permissions = await auth.getUserPermissions(userId);
-            
-            res.json({
-                success: true,
-                user: {
-                    ...user,
-                    permissions: permissions.map(p => ({
-                        code: p.code,
-                        can_view: p.can_view,
-                        can_create: p.can_create,
-                        can_edit: p.can_edit,
-                        can_delete: p.can_delete,
-                        can_approve: p.can_approve
-                    }))
-                }
-            });
-        } catch (error) {
-            console.error('Get user error:', error);
-            res.status(500).json({ 
-                success: false, 
-                error: 'Failed to get user' 
-            });
-        }
-    }
-);
-
-// Create new user (Admin only)
-router.post('/users', 
-    auth.authenticate, 
-    auth.checkPermission(PERMISSIONS.USER_MANAGEMENT.CREATE, 'create'),
-    async (req, res) => {
-        try {
-            const { username, email, password, full_name, role_id, department } = req.body;
-            
-            if (!username || !email || !password || !full_name || !role_id) {
-                return res.status(400).json({ 
-                    success: false, 
-                    error: 'All required fields must be provided' 
-                });
-            }
-            
-            if (password.length < 8) {
-                return res.status(400).json({ 
-                    success: false, 
-                    error: 'Password must be at least 8 characters long' 
-                });
-            }
-            
-            // Check if username or email already exists
-            const existingUser = await new Promise((resolve, reject) => {
-                db.get(
-                    'SELECT id FROM users WHERE username = ? OR email = ?',
-                    [username, email],
-                    (err, row) => {
-                        if (err) reject(err);
-                        else resolve(row);
-                    }
-                );
-            });
-            
-            if (existingUser) {
-                return res.status(400).json({ 
-                    success: false, 
-                    error: 'Username or email already exists' 
-                });
-            }
-            
-            // Hash password
-            const passwordHash = await auth.hashPassword(password);
-            
-            // Insert user
-            const result = await new Promise((resolve, reject) => {
-                db.run(`
-                    INSERT INTO users 
-                    (username, email, password_hash, full_name, role_id, department, is_active)
-                    VALUES (?, ?, ?, ?, ?, ?, 1)
-                `, [username, email, passwordHash, full_name, role_id, department || null], 
-                function(err) {
-                    if (err) reject(err);
-                    else resolve(this);
-                });
-            });
-            
-            // Log creation
-            await auth.logAudit(
-                req.user.id, 
-                'CREATE_USER', 
-                'user', 
-                result.lastID, 
-                null, 
-                { username, email, full_name, role_id, department }, 
-                req
-            );
-            
-            res.status(201).json({ 
-                success: true, 
-                message: 'User created successfully',
-                user_id: result.lastID
-            });
-        } catch (error) {
-            console.error('Create user error:', error);
-            res.status(500).json({ 
-                success: false, 
-                error: 'Failed to create user' 
-            });
-        }
-    }
-);
-
-// Update user (Admin only)
-router.put('/users/:id', 
-    auth.authenticate, 
-    auth.checkPermission(PERMISSIONS.USER_MANAGEMENT.EDIT, 'edit'),
-    async (req, res) => {
-        try {
-            const userId = req.params.id;
-            const { full_name, email, role_id, department, is_active } = req.body;
-            
-            // Get current user data
-            const currentUser = await new Promise((resolve, reject) => {
-                db.get('SELECT * FROM users WHERE id = ?', [userId], (err, row) => {
-                    if (err) reject(err);
-                    else resolve(row);
-                });
-            });
-            
-            if (!currentUser) {
-                return res.status(404).json({ 
-                    success: false, 
-                    error: 'User not found' 
-                });
-            }
-            
-            // Update user
-            await new Promise((resolve, reject) => {
-                db.run(`
-                    UPDATE users 
-                    SET full_name = ?, email = ?, role_id = ?, department = ?, 
-                        is_active = ?, updated_at = CURRENT_TIMESTAMP 
-                    WHERE id = ?
-                `, [full_name, email, role_id, department || null, is_active, userId], 
-                function(err) {
-                    if (err) reject(err);
-                    else resolve(this.changes);
-                });
-            });
-            
-            // Log update
-            await auth.logAudit(
-                req.user.id, 
-                'UPDATE_USER', 
-                'user', 
-                userId, 
-                {
-                    full_name: currentUser.full_name,
-                    email: currentUser.email,
-                    role_id: currentUser.role_id,
-                    department: currentUser.department,
-                    is_active: currentUser.is_active
-                }, 
-                { full_name, email, role_id, department, is_active }, 
-                req
-            );
-            
-            res.json({ 
-                success: true, 
-                message: 'User updated successfully' 
-            });
-        } catch (error) {
-            console.error('Update user error:', error);
-            res.status(500).json({ 
-                success: false, 
-                error: 'Failed to update user' 
-            });
-        }
-    }
-);
-
-// Get all roles
-router.get('/roles', 
-    auth.authenticate, 
-    auth.checkPermission(PERMISSIONS.ROLE_MANAGEMENT.VIEW, 'view'),
-    async (req, res) => {
-        try {
-            const roles = await new Promise((resolve, reject) => {
-                db.all(`
-                    SELECT 
-                        r.*,
-                        COUNT(u.id) as user_count
-                    FROM roles r
-                    LEFT JOIN users u ON r.id = u.role_id AND u.is_active = 1
-                    GROUP BY r.id
-                    ORDER BY r.is_system_role DESC, r.name
-                `, [], (err, rows) => {
-                    if (err) reject(err);
-                    else resolve(rows);
-                });
-            });
-            
-            res.json({ success: true, roles });
-        } catch (error) {
-            console.error('Get roles error:', error);
-            res.status(500).json({ 
-                success: false, 
-                error: 'Failed to get roles' 
-            });
-        }
-    }
-);
-
-// Get role by ID with permissions
-router.get('/roles/:id', 
-    auth.authenticate, 
-    auth.checkPermission(PERMISSIONS.ROLE_MANAGEMENT.VIEW, 'view'),
-    async (req, res) => {
-        try {
-            const roleId = req.params.id;
-            
-            // Get role info
-            const role = await new Promise((resolve, reject) => {
-                db.get('SELECT * FROM roles WHERE id = ?', [roleId], (err, row) => {
-                    if (err) reject(err);
-                    else resolve(row);
-                });
-            });
-            
-            if (!role) {
-                return res.status(404).json({ 
-                    success: false, 
-                    error: 'Role not found' 
-                });
-            }
-            
-            // Get role permissions
-            const permissions = await new Promise((resolve, reject) => {
-                db.all(`
-                    SELECT 
-                        p.*,
-                        rp.can_view,
-                        rp.can_create,
-                        rp.can_edit,
-                        rp.can_delete,
-                        rp.can_approve
-                    FROM role_permissions rp
-                    JOIN permissions p ON rp.permission_id = p.id
-                    WHERE rp.role_id = ?
-                    ORDER BY p.category, p.name
-                `, [roleId], (err, rows) => {
-                    if (err) reject(err);
-                    else resolve(rows);
-                });
-            });
-            
-            res.json({ 
-                success: true, 
-                role: {
-                    ...role,
-                    permissions
-                }
-            });
-        } catch (error) {
-            console.error('Get role error:', error);
-            res.status(500).json({ 
-                success: false, 
-                error: 'Failed to get role' 
-            });
-        }
-    }
-);
-
-// Get all permissions
-router.get('/permissions', 
-    auth.authenticate, 
-    auth.checkPermission(PERMISSIONS.ROLE_MANAGEMENT.VIEW, 'view'),
-    async (req, res) => {
-        try {
-            const permissions = await new Promise((resolve, reject) => {
-                db.all(`
-                    SELECT * FROM permissions 
-                    ORDER BY category, name
-                `, [], (err, rows) => {
-                    if (err) reject(err);
-                    else resolve(rows);
-                });
-            });
-            
-            // Group by category
-            const grouped = {};
-            permissions.forEach(perm => {
-                if (!grouped[perm.category]) {
-                    grouped[perm.category] = [];
-                }
-                grouped[perm.category].push(perm);
-            });
-            
-            res.json({ success: true, permissions: grouped });
-        } catch (error) {
-            console.error('Get permissions error:', error);
-            res.status(500).json({ 
-                success: false, 
-                error: 'Failed to get permissions' 
-            });
-        }
-    }
-);
-
-// Get user activity logs
-router.get('/activity-logs', 
-    auth.authenticate, 
-    auth.checkPermission(PERMISSIONS.SETTINGS.VIEW, 'view'),
-    async (req, res) => {
-        try {
-            const { page = 1, limit = 50, startDate, endDate, userId, action } = req.query;
-            const offset = (page - 1) * limit;
-            
-            let query = `
-                SELECT 
-                    a.*,
-                    u.username,
-                    u.full_name
-                FROM audit_log a
-                LEFT JOIN users u ON a.user_id = u.id
-                WHERE 1=1
-            `;
-            
-            const params = [];
-            
-            if (startDate) {
-                query += ` AND DATE(a.timestamp) >= ?`;
-                params.push(startDate);
-            }
-            
-            if (endDate) {
-                query += ` AND DATE(a.timestamp) <= ?`;
-                params.push(endDate);
-            }
-            
-            if (userId) {
-                query += ` AND a.user_id = ?`;
-                params.push(userId);
-            }
-            
-            if (action) {
-                query += ` AND a.action = ?`;
-                params.push(action);
-            }
-            
-            // Get total count
-            const countQuery = query.replace(
-                'SELECT a.*, u.username, u.full_name',
-                'SELECT COUNT(*) as total'
-            );
-            
-            const totalResult = await new Promise((resolve, reject) => {
-                db.get(countQuery, params, (err, row) => {
-                    if (err) reject(err);
-                    else resolve(row);
-                });
-            });
-            
-            // Get paginated results
-            query += ` ORDER BY a.timestamp DESC LIMIT ? OFFSET ?`;
-            params.push(limit, offset);
-            
-            const logs = await new Promise((resolve, reject) => {
-                db.all(query, params, (err, rows) => {
-                    if (err) reject(err);
-                    else resolve(rows);
-                });
-            });
-            
-            res.json({
-                success: true,
-                logs,
-                pagination: {
-                    page: parseInt(page),
-                    limit: parseInt(limit),
-                    total: totalResult.total,
-                    pages: Math.ceil(totalResult.total / limit)
-                }
-            });
-        } catch (error) {
-            console.error('Get activity logs error:', error);
-            res.status(500).json({ 
-                success: false, 
-                error: 'Failed to get activity logs' 
-            });
-        }
-    }
-);
-
-// Get system stats (for admin dashboard)
-router.get('/system-stats', 
-    auth.authenticate, 
-    auth.requireRole(['Super Administrator', 'Administrator']),
-    async (req, res) => {
-        try {
-            const stats = await new Promise((resolve, reject) => {
-                db.get(`
-                    SELECT 
-                        (SELECT COUNT(*) FROM users WHERE is_active = 1) as active_users,
-                        (SELECT COUNT(*) FROM user_sessions WHERE is_active = 1 AND expires_at > datetime('now')) as active_sessions,
-                        (SELECT COUNT(*) FROM audit_log WHERE DATE(timestamp) = DATE('now')) as today_actions,
-                        (SELECT COUNT(*) FROM roles) as total_roles,
-                        (SELECT COUNT(*) FROM users WHERE DATE(created_at) = DATE('now')) as new_users_today
-                `, [], (err, row) => {
-                    if (err) reject(err);
-                    else resolve(row);
-                });
-            });
-            
-            res.json({ success: true, stats });
-        } catch (error) {
-            console.error('Get system stats error:', error);
-            res.status(500).json({ 
-                success: false, 
-                error: 'Failed to get system stats' 
-            });
-        }
-    }
-);
 
 // Validate token (for frontend token validation)
 router.get('/validate-token', auth.authenticate, async (req, res) => {
     try {
         const permissions = await auth.getUserPermissions(req.user.id);
         
+        // Create permission map
+        const permissionMap = {};
+        permissions.forEach(perm => {
+            permissionMap[perm.code] = {
+                can_view: perm.can_view === 1,
+                can_create: perm.can_create === 1,
+                can_edit: perm.can_edit === 1,
+                can_delete: perm.can_delete === 1,
+                can_approve: perm.can_approve === 1
+            };
+        });
+        
         res.json({
             success: true,
             user: {
                 id: req.user.id,
                 username: req.user.username,
+                email: req.user.email,
+                full_name: req.user.full_name,
                 role: req.user.role,
                 role_id: req.user.role_id,
-                permissions: permissions.map(p => ({
-                    code: p.code,
-                    can_view: p.can_view,
-                    can_create: p.can_create,
-                    can_edit: p.can_edit,
-                    can_delete: p.can_delete,
-                    can_approve: p.can_approve
-                }))
+                department: req.user.department
             },
+            permissions: permissionMap,
             valid: true
         });
     } catch (error) {
@@ -936,9 +598,43 @@ router.get('/validate-token', auth.authenticate, async (req, res) => {
         res.status(401).json({ 
             success: false, 
             valid: false, 
-            error: 'Invalid token' 
+            error: 'Invalid token',
+            code: 'INVALID_TOKEN'
         });
     }
+});
+
+// =============== UTILITY ROUTES ===============
+
+// Health check endpoint
+router.get('/health', (req, res) => {
+    res.json({
+        success: true,
+        status: 'OK',
+        timestamp: new Date().toISOString(),
+        service: 'Authentication Service',
+        version: '1.0.0'
+    });
+});
+
+// Get server info (public endpoint)
+router.get('/info', (req, res) => {
+    res.json({
+        success: true,
+        service: 'Tire Management System Authentication',
+        version: '1.0.0',
+        requires_authentication: true,
+        available_endpoints: [
+            'POST /api/auth/login',
+            'POST /api/auth/refresh',
+            'POST /api/auth/logout',
+            'GET /api/auth/profile',
+            'PUT /api/auth/profile',
+            'POST /api/auth/change-password',
+            'GET /api/auth/validate-token'
+        ],
+        authentication_methods: ['JWT Token', 'Cookie']
+    });
 });
 
 module.exports = router;
