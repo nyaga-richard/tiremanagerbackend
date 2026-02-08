@@ -459,6 +459,7 @@ async function addMissingColumns() {
     // List of columns to add if they don't exist
     const columnUpdates = [
         // Note: We removed most columns since they're now included in CREATE TABLE statements
+        { table: 'roles', column: 'updated_at', definition: 'TIMESTAMP' },
         { table: 'tires', column: 'po_item_id', definition: 'INTEGER REFERENCES purchase_order_items(id)' },
         { table: 'tires', column: 'grn_id', definition: 'INTEGER REFERENCES goods_received_notes(id)' },
         { table: 'tires', column: 'grn_item_id', definition: 'INTEGER REFERENCES grn_items(id)' },
