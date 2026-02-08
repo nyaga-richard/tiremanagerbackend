@@ -19,6 +19,9 @@ const purchaseOrderRoutes = require('./routes/purchaseOrders');
 const tireMetaRoutes = require('./routes/tireMeta');
 const grnRoutes = require('./routes/grn');
 const accountingRoutes = require('./routes/accounting');
+const roleRoutes = require('./routes/roles');
+const userRoutes = require('./routes/users');
+
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -52,6 +55,8 @@ app.use('/api/purchase-orders', purchaseOrderRoutes);
 app.use('/api/tires/meta', tireMetaRoutes);
 app.use('/api/grn', grnRoutes);
 app.use('/api/accounting', accountingRoutes);
+app.use('/api/roles', roleRoutes);
+app.use('/api/users', userRoutes);
 
 // Health check
 app.get('/health', (req, res) => {
