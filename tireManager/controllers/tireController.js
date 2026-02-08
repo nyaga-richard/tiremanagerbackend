@@ -36,14 +36,15 @@ class TireController {
                     current_location: 'MAIN_WAREHOUSE'
                 });
 
-                // Log movement
+                // Log movement with supplier_id
                 await Movement.logMovement({
                     tire_id: tireId,
                     from_location: 'SUPPLIER',
                     to_location: 'MAIN_WAREHOUSE',
                     movement_type: 'PURCHASE_TO_STORE',
                     user_id,
-                    notes: `Purchase from ${supplier.name}`
+                    notes: `Purchase from ${supplier.name}`,
+                    supplier_id: supplier_id  // Added supplier_id
                 });
 
                 // Add to supplier ledger
@@ -120,7 +121,7 @@ class TireController {
             // 4️⃣ Update tire status
             await Tire.updateStatus(tire_id, 'ON_VEHICLE', `Vehicle ${vehicle_id}`);
 
-            // 5️⃣ Log movement
+            // 5️⃣ Log movement with vehicle_id
             await Movement.logMovement({
                 tire_id,
                 from_location: 'MAIN_WAREHOUSE',
@@ -129,7 +130,8 @@ class TireController {
                 reference_id: assignmentId,
                 reference_type: 'ASSIGNMENT',
                 user_id,
-                notes: `Installed on vehicle ${vehicle_id}`
+                notes: `Installed on vehicle ${vehicle_id}`,
+                vehicle_id: vehicle_id  // Added vehicle_id
             });
 
             res.json({
@@ -143,20 +145,25 @@ class TireController {
         }
     }
 
-
     // 3. Remove tire from vehicle
     static async removeFromVehicle(req, res) {
         try {
             const { assignment_id, removal_date, removal_odometer, user_id, reason, next_status = 'USED_STORE' } = req.body;
 
-            // Get current assignment
+            const db = require('../config/database');
+
+            // Get current assignment with vehicle details
             const assignment = await new Promise((resolve, reject) => {
-                const db = require('../config/database');
                 db.get(`
-                    SELECT ta.*, t.id as tire_id 
+                    SELECT 
+                        ta.*, 
+                        t.id as tire_id,
+                        v.vehicle_number,
+                        v.id as vehicle_id
                     FROM tire_assignments ta 
                     JOIN tires t ON ta.tire_id = t.id 
-                    WHERE ta.id = ?`, 
+                    JOIN vehicles v ON ta.vehicle_id = v.id
+                    WHERE ta.id = ? AND ta.removal_date IS NULL`, 
                     [assignment_id], 
                     (err, row) => {
                         if (err) reject(err);
@@ -166,7 +173,7 @@ class TireController {
             });
 
             if (!assignment) {
-                return res.status(404).json({ error: 'Assignment not found' });
+                return res.status(404).json({ error: 'Active assignment not found' });
             }
 
             // Mark assignment as removed
@@ -175,14 +182,17 @@ class TireController {
             // Update tire status
             await Tire.updateStatus(assignment.tire_id, next_status, 'MAIN_WAREHOUSE');
 
-            // Log movement
+            // Log movement with vehicle_id
             await Movement.logMovement({
                 tire_id: assignment.tire_id,
                 from_location: `Vehicle-${assignment.vehicle_id}`,
                 to_location: 'MAIN_WAREHOUSE',
                 movement_type: 'VEHICLE_TO_STORE',
                 user_id,
-                notes: `Removed from vehicle: ${reason}`
+                notes: `Removed from vehicle ${assignment.vehicle_number}: ${reason}`,
+                reference_id: assignment_id,
+                reference_type: 'ASSIGNMENT',
+                vehicle_id: assignment.vehicle_id  // Added vehicle_id
             });
 
             const tire = await Tire.findById(assignment.tire_id);
@@ -220,14 +230,15 @@ class TireController {
                 created_by: user_id
             });
 
-            // Log movement
+            // Log movement with supplier_id
             await Movement.logMovement({
                 tire_id,
                 from_location: 'MAIN_WAREHOUSE',
                 to_location: `RETREAD_SUPPLIER-${supplier_id}`,
                 movement_type: 'STORE_TO_RETREAD_SUPPLIER',
                 user_id,
-                notes: 'Sent for retreading'
+                notes: 'Sent for retreading',
+                supplier_id: supplier_id  // Added supplier_id
             });
 
             const updatedTire = await Tire.findById(tire_id);
@@ -264,14 +275,15 @@ class TireController {
                 );
             });
 
-            // Log movement
+            // Log movement with supplier_id
             await Movement.logMovement({
                 tire_id,
                 from_location: `RETREAD_SUPPLIER`,
                 to_location: 'MAIN_WAREHOUSE',
                 movement_type: 'RETREAD_SUPPLIER_TO_STORE',
                 user_id,
-                notes: 'Returned from retreading'
+                notes: 'Returned from retreading',
+                supplier_id: tire.supplier_id  // Added tire's supplier_id
             });
 
             const updatedTire = await Tire.findById(tire_id);
@@ -392,31 +404,40 @@ class TireController {
         }
     }
 
-    // TireController.js
+    // 9. Get transactions with enhanced supplier and vehicle data
     static async getTransactions(req, res) {
         try {
             const db = require('../config/database');
 
             // Optional filters from query
-            const { type, status } = req.query;
+            const { type, status, startDate, endDate } = req.query;
             let sql = `
                 SELECT 
                     m.id,
                     m.movement_type as type,
-                    m.created_at as date,
+                    m.movement_date as date,
+                    m.created_at,
                     m.notes as description,
                     t.serial_number as tire_serial,
                     t.size as tire_size,
                     t.brand as tire_brand,
-                    s.name as supplier_name,
-                    v.vehicle_number,
+                    t.status as tire_status,
+                    -- Use directly stored supplier_name or join to suppliers table
+                    COALESCE(m.supplier_name, s.name) as supplier_name,
+                    -- Use directly stored vehicle_number
+                    COALESCE(
+                        m.vehicle_number,
+                        (SELECT v.vehicle_number 
+                         FROM tire_assignments ta 
+                         JOIN vehicles v ON ta.vehicle_id = v.id 
+                         WHERE ta.id = m.reference_id AND m.reference_type = 'ASSIGNMENT')
+                    ) as vehicle_number,
                     m.user_id,
-                    m.id as reference
+                    m.reference_id as reference,
+                    m.reference_type
                 FROM tire_movements m
                 LEFT JOIN tires t ON m.tire_id = t.id
                 LEFT JOIN suppliers s ON t.supplier_id = s.id
-                LEFT JOIN tire_assignments ta ON m.reference_id = ta.id AND m.reference_type = 'ASSIGNMENT'
-                LEFT JOIN vehicles v ON ta.vehicle_id = v.id
                 WHERE 1=1
             `;
             const params = [];
@@ -427,12 +448,21 @@ class TireController {
             }
 
             if (status) {
-                // Example: filter by tire status at the time of query
                 sql += ` AND t.status = ?`;
                 params.push(status);
             }
 
-            sql += ` ORDER BY m.created_at DESC`;
+            if (startDate) {
+                sql += ` AND DATE(m.movement_date) >= DATE(?)`;
+                params.push(startDate);
+            }
+
+            if (endDate) {
+                sql += ` AND DATE(m.movement_date) <= DATE(?)`;
+                params.push(endDate);
+            }
+
+            sql += ` ORDER BY m.movement_date DESC, m.created_at DESC`;
 
             const transactions = await new Promise((resolve, reject) => {
                 db.all(sql, params, (err, rows) => {

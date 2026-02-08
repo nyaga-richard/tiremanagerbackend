@@ -1,6 +1,7 @@
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const { getAllPermissions,DEFAULT_ROLE_PERMISSIONS, SYSTEM_ROLES } = require('../config/permissions-config');
+const { table } = require('console');
 
 // Create database connection
 const dbPath = path.join(__dirname, '..', 'database', 'tires.db');
@@ -459,6 +460,10 @@ async function addMissingColumns() {
     // List of columns to add if they don't exist
     const columnUpdates = [
         // Note: We removed most columns since they're now included in CREATE TABLE statements
+        {table: 'tire_movements', column: 'supplier_id', definition: 'INTEGER REFERENCES suppliers(id)'},
+        {table: 'tire_movements', column: 'vehicle_id', definition: 'INTEGER REFERENCES vehicles(id)'},
+        {table: 'tire_movements', column: 'supplier_name', definition: 'TEXT'},
+        {table: 'tire_movements', column: 'vehicle_number', definition: 'TEXT'},
         { table: 'roles', column: 'updated_at', definition: 'TIMESTAMP' },
         { table: 'tires', column: 'po_item_id', definition: 'INTEGER REFERENCES purchase_order_items(id)' },
         { table: 'tires', column: 'grn_id', definition: 'INTEGER REFERENCES goods_received_notes(id)' },
