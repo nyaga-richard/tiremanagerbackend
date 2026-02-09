@@ -21,6 +21,7 @@ const grnRoutes = require('./routes/grn');
 const accountingRoutes = require('./routes/accounting');
 const roleRoutes = require('./routes/roles');
 const userRoutes = require('./routes/users');
+const dashboardRoutes = require('./routes/dashboard');
 
 
 const app = express();
@@ -57,6 +58,7 @@ app.use('/api/grn', grnRoutes);
 app.use('/api/accounting', accountingRoutes);
 app.use('/api/roles', roleRoutes);
 app.use('/api/users', userRoutes);
+app.use('/api/dashboard', dashboardRoutes);
 
 // Health check
 app.get('/health', (req, res) => {
