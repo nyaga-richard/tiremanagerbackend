@@ -593,7 +593,6 @@ class TireController {
                 LEFT JOIN tire_movements tm ON sl.reference_number LIKE '%' || tm.reference_id || '%'
                 LEFT JOIN tires t ON tm.tire_id = t.id
                 WHERE sl.transaction_type = 'RETREAD_SERVICE'
-                AND s.type = 'RETREAD'
             `;
             
             const params = [];
