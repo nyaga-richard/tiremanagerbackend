@@ -4,8 +4,18 @@ const TireController = require('../controllers/tireController');
 
 
 
-// Purchase new tires
-router.post('/purchase', TireController.purchaseTires);
+// Retreading specific routes
+router.get('/retread/eligible', TireController.getRetreadEligibleTires); // Get eligible tires
+
+router.post('/retread/send-batch', TireController.sendForRetreading); // Send batch for retreading
+
+router.post('/retread/return-batch', TireController.returnFromRetreading); // Return batch from retreading
+
+router.post('/retread/mark', TireController.markForRetreading); // Mark tires for retreading
+
+router.get('/retread/status', TireController.getRetreadStatusReport); // Get retread status
+
+router.get('/retread/cost-analysis', TireController.getRetreadCostAnalysis); // Cost analysis
 
 // Install on vehicle
 router.post('/install', TireController.installOnVehicle);
