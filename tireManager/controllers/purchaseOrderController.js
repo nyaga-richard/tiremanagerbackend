@@ -14,6 +14,7 @@ class PurchaseOrderController {
         this.getItems = this.getItems.bind(this);
     }
 // Create purchase order
+
 async create(req, res) {
     try {
         let { items, ...poData } = req.body;
@@ -37,7 +38,7 @@ async create(req, res) {
         
         // Calculate totals from items if provided
         if (items && Array.isArray(items) && items.length > 0) {
-            let totalAmount = 0;
+            let subtotalIncludingVAT = 0;
             
             // Map field names for backward compatibility
             items = items.map(item => ({
@@ -76,7 +77,7 @@ async create(req, res) {
                     item.total_price = item.quantity * item.unit_price;
                 }
                 
-                totalAmount += item.total_price;
+                subtotalIncludingVAT += item.total_price;
                 
                 // Additional validations
                 if (item.quantity <= 0) {
@@ -94,18 +95,55 @@ async create(req, res) {
                 }
             }
             
+            // IMPORTANT: Calculate totals correctly
+            // VAT is 16% (0.16)
+            const VAT_RATE = 0.16;
+            
+            // If total_amount (excluding VAT) is provided, use it
+            // Otherwise calculate from subtotalIncludingVAT
+            let total_amount = poData.total_amount;
+            let tax_amount = poData.tax_amount;
+            
+            if (!total_amount && subtotalIncludingVAT > 0) {
+                // Calculate: total_amount = subtotalIncludingVAT / (1 + VAT_RATE)
+                total_amount = subtotalIncludingVAT / (1 + VAT_RATE);
+            }
+            
+            if (!tax_amount && subtotalIncludingVAT > 0) {
+                // Calculate: tax_amount = subtotalIncludingVAT - total_amount
+                tax_amount = subtotalIncludingVAT - total_amount;
+            }
+            
+            // If we still don't have total_amount or tax_amount, use default calculation
+            if (!total_amount && !tax_amount) {
+                total_amount = subtotalIncludingVAT / (1 + VAT_RATE);
+                tax_amount = subtotalIncludingVAT - total_amount;
+            }
+            
             // Update PO totals
-            poData.total_amount = totalAmount;
-            poData.tax_amount = poData.tax_amount || (totalAmount * 0.1); // 10% tax if not provided
+            poData.total_amount = total_amount || 0;
+            poData.tax_amount = tax_amount || 0;
             poData.shipping_amount = poData.shipping_amount || 0;
-            poData.final_amount = poData.total_amount + poData.tax_amount + poData.shipping_amount;
+            
+            // CORRECT: final_amount = subtotalIncludingVAT + shipping_amount
+            // NOT: final_amount = (total_amount * 1.16) + shipping_amount
+            poData.final_amount = subtotalIncludingVAT + poData.shipping_amount;
+            
+            console.log('Calculated totals:');
+            console.log('- Subtotal including VAT:', subtotalIncludingVAT);
+            console.log('- Total amount (excluding VAT):', poData.total_amount);
+            console.log('- Tax amount (VAT):', poData.tax_amount);
+            console.log('- Shipping amount:', poData.shipping_amount);
+            console.log('- Final amount:', poData.final_amount);
         } else {
             // Set defaults if no items
             poData.total_amount = poData.total_amount || 0;
             poData.tax_amount = poData.tax_amount || 0;
             poData.shipping_amount = poData.shipping_amount || 0;
+            
+            // CORRECT: final_amount = (total_amount + tax_amount) + shipping_amount
             poData.final_amount = poData.final_amount || 
-                (poData.total_amount + poData.tax_amount + poData.shipping_amount);
+                ((poData.total_amount + poData.tax_amount) + poData.shipping_amount);
         }
         
         // Set default status
