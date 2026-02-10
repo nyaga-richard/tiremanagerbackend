@@ -179,6 +179,8 @@ class GRNController {
         }
     }
 
+    // In the create method of GRNController.js, add brand validation and ensure it's in response
+
     async create(req, res) {
         try {
             console.log('GRN Request Body:', JSON.stringify(req.body, null, 2));
@@ -195,14 +197,13 @@ class GRNController {
                 items
             } = req.body;
 
-            // Get user ID - handle both authenticated and non-authenticated scenarios
+            // Get user ID
             let received_by;
             if (req.user && req.user.id) {
                 received_by = req.user.id;
             } else {
-                // Fallback for testing or development
                 console.warn('No authenticated user found, using default user ID');
-                received_by = 1; // Default admin user ID
+                received_by = 1;
             }
 
             // Validate required fields
@@ -215,7 +216,7 @@ class GRNController {
 
             console.log('Validating items...');
             
-            // Validate each item
+            // Validate each item - ADD BRAND VALIDATION
             for (let i = 0; i < items.length; i++) {
                 const item = items[i];
                 console.log(`Item ${i + 1}:`, item);
@@ -224,6 +225,14 @@ class GRNController {
                     return res.status(400).json({
                         success: false,
                         message: `Item ${i + 1}: po_item_id and positive quantity_received are required`
+                    });
+                }
+
+                // ADD BRAND VALIDATION HERE
+                if (!item.brand || item.brand.trim() === '') {
+                    return res.status(400).json({
+                        success: false,
+                        message: `Item ${i + 1}: brand is required for received items`
                     });
                 }
 
@@ -273,7 +282,12 @@ class GRNController {
                 po_id,
                 receipt_date,
                 received_by,
-                itemCount: items.length
+                itemCount: items.length,
+                items: items.map(item => ({ 
+                    po_item_id: item.po_item_id, 
+                    brand: item.brand,
+                    quantity: item.quantity_received 
+                }))
             });
 
             // Create GRN
@@ -295,13 +309,25 @@ class GRNController {
             // Update inventory
             await GoodsReceivedNote.updateInventory(result.grnId);
 
-            // Update PO status - fix: use a regular function instead of this.updatePoStatus
+            // Update PO status
             await this.updatePoStatusInternal(po_id);
+
+            // ENSURE BRAND IS INCLUDED IN RESPONSE
+            // If the result doesn't have brand in items, add it from the request
+            const enhancedResult = {
+                ...result,
+                items: result.items.map((resultItem, index) => ({
+                    ...resultItem,
+                    brand: resultItem.brand || items[index]?.brand || '' // Get brand from request if missing
+                }))
+            };
+
+            console.log('Enhanced GRN result with brand:', enhancedResult);
 
             res.status(201).json({
                 success: true,
                 message: 'Goods Received Note created successfully',
-                data: result
+                data: enhancedResult
             });
 
         } catch (error) {
