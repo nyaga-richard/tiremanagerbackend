@@ -157,7 +157,7 @@ class GoodsReceivedNote {
             vehicle_number,
             driver_name,
             notes,
-            items // Array of items with serial numbers
+            items // Array of items with serial numbers AND brand
         } = grnData;
 
         return new Promise((resolve, reject) => {
@@ -221,16 +221,17 @@ class GoodsReceivedNote {
                                 quantity_received,
                                 unit_cost,
                                 batch_number,
-                                serial_numbers, // Array of serial numbers
-                                notes
+                                brand, // Get brand from request
+                                serial_numbers,
+                                notes: itemNotes
                             } = item;
 
-                            // 2a. Create GRN item
+                            // 2a. Create GRN item with brand
                             const grnItemSql = `
                                 INSERT INTO grn_items 
                                 (grn_id, po_item_id, quantity_received, unit_cost, 
-                                 batch_number, serial_numbers, notes)
-                                VALUES (?, ?, ?, ?, ?, ?, ?)`;
+                                 batch_number, serial_numbers, notes, brand)  -- ADD brand column
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;
 
                             const serialNumbersJson = JSON.stringify(serial_numbers || []);
 
@@ -241,7 +242,8 @@ class GoodsReceivedNote {
                                 unit_cost,
                                 batch_number,
                                 serialNumbersJson,
-                                notes
+                                itemNotes,
+                                brand  // Store brand from request
                             ], function(err) {
                                 if (err) {
                                     db.run('ROLLBACK');
@@ -287,6 +289,7 @@ class GoodsReceivedNote {
                                                     grnItemId: grnItemId,
                                                     po_item_id: po_item_id,
                                                     quantity_received: quantity_received,
+                                                    brand: brand,  // Include brand in response
                                                     serial_numbers: serial_numbers
                                                 });
                                                 processNextItem(index + 1);
@@ -297,7 +300,7 @@ class GoodsReceivedNote {
                                                 ? serial_numbers[tireIndex]
                                                 : `${grnNumber}-${po_item_id.toString().padStart(3, '0')}-${(tireIndex + 1).toString().padStart(3, '0')}`;
 
-                                            // Create tire
+                                            // Create tire with brand from GRN item, not from PO
                                             const tireSql = `
                                                 INSERT INTO tires 
                                                 (serial_number, size, brand, model, type,
@@ -309,7 +312,7 @@ class GoodsReceivedNote {
                                             db.run(tireSql, [
                                                 serialNumber,
                                                 poItem.size,
-                                                poItem.brand,
+                                                brand || poItem.brand,  // Use brand from GRN item first
                                                 poItem.model,
                                                 poItem.type,
                                                 unit_cost || poItem.unit_price,
@@ -329,7 +332,8 @@ class GoodsReceivedNote {
                                                 generatedTires.push({
                                                     id: tireId,
                                                     serial_number: serialNumber,
-                                                    po_item_id: po_item_id
+                                                    po_item_id: po_item_id,
+                                                    brand: brand || poItem.brand  // Include brand
                                                 });
 
                                                 // Create movement record
@@ -416,8 +420,9 @@ class GoodsReceivedNote {
     static async getItems(grnId) {
         const sql = `
             SELECT gi.*, 
+                   gi.brand as received_brand,  -- Get brand from grn_items
                    poi.size,
-                   poi.brand,
+                   poi.brand as po_brand,      -- Keep PO brand for reference
                    poi.model,
                    poi.type,
                    poi.quantity as po_quantity,
@@ -428,7 +433,7 @@ class GoodsReceivedNote {
             LEFT JOIN tires t ON gi.id = t.grn_item_id
             WHERE gi.grn_id = ?
             GROUP BY gi.id
-            ORDER BY poi.size, poi.brand`;
+            ORDER BY poi.size, gi.brand`;  // Order by received brand
 
         return new Promise((resolve, reject) => {
             db.all(sql, [grnId], (err, rows) => {
@@ -438,6 +443,10 @@ class GoodsReceivedNote {
                     rows.forEach(row => {
                         if (row.serial_numbers) {
                             row.serial_numbers = JSON.parse(row.serial_numbers);
+                        }
+                        // Ensure brand is present - use received_brand if available
+                        if (!row.brand && row.received_brand) {
+                            row.brand = row.received_brand;
                         }
                     });
                     resolve(rows);
@@ -450,7 +459,7 @@ class GoodsReceivedNote {
         const sql = `
             SELECT t.*, 
                    poi.size,
-                   poi.brand,
+                   t.brand,  -- Get brand from tires table
                    poi.model,
                    poi.type
             FROM tires t
@@ -480,12 +489,10 @@ class GoodsReceivedNote {
         });
     }
 
-    // Add this method to your existing GoodsReceivedNote model
     static async updateInvoiceNumber(grnId, invoiceNumber) {
         const sql = `
             UPDATE goods_received_notes 
-            SET supplier_invoice_number = ?
-                
+            SET supplier_invoice_number = ?                
             WHERE id = ?`;
 
         return new Promise((resolve, reject) => {
@@ -495,6 +502,7 @@ class GoodsReceivedNote {
             });
         });
     }
+
     static async updateInventory(grnId) {
         const sql = `
             INSERT OR REPLACE INTO inventory_catalog 
@@ -502,7 +510,7 @@ class GoodsReceivedNote {
              last_purchase_date, last_purchase_price, supplier_id)
             SELECT 
                 poi.size,
-                poi.brand,
+                COALESCE(gi.brand, poi.brand) as brand,  -- Use GRN brand if available
                 poi.model,
                 poi.type,
                 COALESCE(SUM(gi.quantity_received), 0) as received_qty,
@@ -514,7 +522,7 @@ class GoodsReceivedNote {
             JOIN goods_received_notes grn ON gi.grn_id = grn.id
             JOIN purchase_orders po ON grn.po_id = po.id
             WHERE gi.grn_id = ?
-            GROUP BY poi.size, poi.brand, poi.model, poi.type
+            GROUP BY poi.size, COALESCE(gi.brand, poi.brand), poi.model, poi.type
             ON CONFLICT(size, brand, model, type) DO UPDATE SET
                 current_stock = current_stock + EXCLUDED.current_stock,
                 last_purchase_date = EXCLUDED.last_purchase_date,
