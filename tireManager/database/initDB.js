@@ -441,6 +441,123 @@ async function createTables() {
             is_active BOOLEAN DEFAULT 1,
             description TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )`,
+
+        `CREATE TABLE IF NOT EXISTS system_settings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            company_name TEXT NOT NULL,
+            company_address TEXT,
+            company_phone TEXT,
+            company_email TEXT,
+            company_website TEXT,
+            company_tax_id TEXT,
+            company_logo TEXT,
+            fiscal_year_start DATE,
+            fiscal_year_end DATE,
+            date_format TEXT DEFAULT 'MMM dd, yyyy',
+            time_format TEXT DEFAULT 'HH:mm:ss',
+            timezone TEXT DEFAULT 'Africa/Nairobi',
+            currency TEXT DEFAULT 'KES',
+            currency_symbol TEXT DEFAULT 'KSH',
+            vat_rate REAL DEFAULT 16,
+            updated_by INTEGER REFERENCES users(id),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )`,
+
+
+        `CREATE TABLE IF NOT EXISTS email_settings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            smtp_host TEXT,
+            smtp_port INTEGER,
+            smtp_encryption TEXT CHECK(smtp_encryption IN ('tls', 'ssl', 'none')) DEFAULT 'tls',
+            smtp_username TEXT,
+            smtp_password TEXT,
+            from_email TEXT,
+            from_name TEXT,
+            reply_to TEXT,
+            enabled BOOLEAN DEFAULT 0,
+            updated_by INTEGER REFERENCES users(id),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )`,
+
+        `CREATE TABLE IF NOT EXISTS notification_settings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email_notifications BOOLEAN DEFAULT 1,
+            system_notifications BOOLEAN DEFAULT 1,
+            purchase_order_alerts BOOLEAN DEFAULT 1,
+            low_stock_alerts BOOLEAN DEFAULT 1,
+            retread_due_alerts BOOLEAN DEFAULT 1,
+            vehicle_service_alerts BOOLEAN DEFAULT 1,
+            user_login_alerts BOOLEAN DEFAULT 0,
+            daily_summary BOOLEAN DEFAULT 0,
+            weekly_report BOOLEAN DEFAULT 1,
+            updated_by INTEGER REFERENCES users(id),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )`,
+
+        `CREATE TABLE IF NOT EXISTS backup_settings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            enabled BOOLEAN DEFAULT 1,
+            frequency TEXT CHECK(frequency IN ('daily', 'weekly', 'monthly')) DEFAULT 'daily',
+            retention_days INTEGER DEFAULT 30,
+            backup_time TEXT DEFAULT '02:00',
+            include_attachments BOOLEAN DEFAULT 1,
+            last_backup TIMESTAMP,
+            last_backup_size INTEGER,
+            last_backup_status TEXT CHECK(last_backup_status IN ('success', 'failed')),
+            updated_by INTEGER REFERENCES users(id),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )`,
+
+        `CREATE TABLE IF NOT EXISTS audit_settings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            retention_days INTEGER DEFAULT 90,
+            log_failed_logins BOOLEAN DEFAULT 1,
+            log_successful_logins BOOLEAN DEFAULT 0,
+            log_api_calls BOOLEAN DEFAULT 0,
+            log_data_changes BOOLEAN DEFAULT 1,
+            log_exports BOOLEAN DEFAULT 1,
+            updated_by INTEGER REFERENCES users(id),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )`,
+
+
+        `CREATE TABLE IF NOT EXISTS tax_rates (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            rate REAL NOT NULL,
+            type TEXT CHECK(type IN ('VAT', 'SERVICE', 'OTHER')) DEFAULT 'VAT',
+            description TEXT,
+            is_active BOOLEAN DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )`,
+
+
+        `CREATE TABLE IF NOT EXISTS payment_terms (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            days INTEGER NOT NULL,
+            description TEXT,
+            is_active BOOLEAN DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )`,
+
+
+        `CREATE TABLE IF NOT EXISTS system_settings_store (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            setting_key TEXT UNIQUE NOT NULL,
+            setting_value TEXT,
+            description TEXT,
+            updated_by INTEGER REFERENCES users(id),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )`
     ];
 

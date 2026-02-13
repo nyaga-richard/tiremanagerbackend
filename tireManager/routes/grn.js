@@ -1,9 +1,17 @@
 const express = require('express');
 const router = express.Router();
 const GRNController = require('../controllers/GRNController');
+const AuthMiddleware = require('../middleware/auth-middleware');
+const db = require('../config/database');
+
+// Initialize auth middleware
+const auth = new AuthMiddleware(db);
 
 // Create instance with proper binding
 const grnController = new GRNController();
+
+// Apply authentication middleware to ALL GRN routes
+router.use(auth.authenticate);
 
 // Generate GRN number
 router.get('/generate-number', (req, res) => grnController.generateGrnNumber(req, res));
@@ -18,7 +26,6 @@ router.get('/', (req, res) => grnController.getAll(req, res));
 router.post('/', (req, res) => grnController.create(req, res));
 
 router.patch('/:id', (req, res) => grnController.updateInvoice(req, res));
-
 
 // Get GRN by ID
 router.get('/:id', (req, res) => grnController.getById(req, res));

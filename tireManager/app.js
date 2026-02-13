@@ -22,6 +22,7 @@ const accountingRoutes = require('./routes/accounting');
 const roleRoutes = require('./routes/roles');
 const userRoutes = require('./routes/users');
 const dashboardRoutes = require('./routes/dashboard');
+const settingsRoutes = require('./routes/settings');
 
 
 const app = express();
@@ -59,6 +60,7 @@ app.use('/api/accounting', accountingRoutes);
 app.use('/api/roles', roleRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/settings', settingsRoutes);
 
 // Health check
 app.get('/health', (req, res) => {
