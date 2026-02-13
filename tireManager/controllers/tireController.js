@@ -19,9 +19,8 @@ class TireController {
                      AND movement_type = 'STORE_TO_RETREAD_SUPPLIER') as previous_retread_count
                 FROM tires t
                 LEFT JOIN suppliers s ON t.supplier_id = s.id
-                WHERE t.status = 'USED_STORE'
-                AND t.type = 'NEW'  -- Only new tires can be retreaded
-            `;
+                WHERE t.status IN ('USED_STORE', 'AWAITING_RETREAD')
+                `;
             
             const params = [];
             
@@ -106,7 +105,7 @@ class TireController {
                     }
 
                     // Check if tire is eligible for retreading
-                    if (tire.status !== 'USED_STORE') {
+                    if (tire.status !== 'USED_STORE' && tire.status !== 'AWAITING_RETREAD')  {
                         errors.push(`Tire ${tire.serial_number}: Not in USED_STORE status (current: ${tire.status})`);
                         failedTires.push({ 
                             tire_id, 
@@ -116,15 +115,15 @@ class TireController {
                         continue;
                     }
 
-                    if (tire.type !== 'NEW') {
-                        errors.push(`Tire ${tire.serial_number}: Already retreaded (type: ${tire.type})`);
-                        failedTires.push({ 
-                            tire_id, 
-                            serial_number: tire.serial_number, 
-                            error: `Already retreaded: ${tire.type}` 
-                        });
-                        continue;
-                    }
+                    // if (tire.type !== 'NEW') {
+                    //     errors.push(`Tire ${tire.serial_number}: Already retreaded (type: ${tire.type})`);
+                    //     failedTires.push({ 
+                    //         tire_id, 
+                    //         serial_number: tire.serial_number, 
+                    //         error: `Already retreaded: ${tire.type}` 
+                    //     });
+                    //     continue;
+                    // }
 
                     // Get supplier details
                     const supplier = await new Promise((resolve, reject) => {
@@ -594,7 +593,6 @@ class TireController {
                 LEFT JOIN tire_movements tm ON sl.reference_number LIKE '%' || tm.reference_id || '%'
                 LEFT JOIN tires t ON tm.tire_id = t.id
                 WHERE sl.transaction_type = 'RETREAD_SERVICE'
-                AND s.type = 'RETREAD'
             `;
             
             const params = [];
