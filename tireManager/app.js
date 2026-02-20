@@ -23,6 +23,7 @@ const roleRoutes = require('./routes/roles');
 const userRoutes = require('./routes/users');
 const dashboardRoutes = require('./routes/dashboard');
 const settingsRoutes = require('./routes/settings');
+const retreadRoutes = require('./routes/retreadRoutes');
 
 
 const app = express();
@@ -61,6 +62,7 @@ app.use('/api/roles', roleRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/settings', settingsRoutes);
+app.use('/api/retread', retreadRoutes);
 
 // Health check
 app.get('/health', (req, res) => {
