@@ -781,126 +781,6 @@ async function initializeChartOfAccounts() {
     }
 }
 
-// In your existing database.js file, update the initializeSampleData function:
-
-async function seedPermissions() {
-    console.log('\nSeeding permissions...');
-    
-    const permissions = getAllPermissions();
-    
-    for (const perm of permissions) {
-        try {
-            const sql = `
-                INSERT OR IGNORE INTO permissions 
-                (category, code, name, description)
-                VALUES (?, ?, ?, ?)`;
-            
-            await runQuery(sql, [
-                perm.category,
-                perm.code,
-                perm.name,
-                `Permission to ${perm.name.toLowerCase()}`
-            ]);
-            console.log(`✓ Permission ${perm.code} seeded`);
-        } catch (error) {
-            console.error(`Error seeding permission ${perm.code}:`, error.message);
-        }
-    }
-}
-
-async function initializeSystemRolesAndPermissions() {
-    console.log('\nInitializing system roles and permissions...');
-    
-    try {
-        // Create system roles
-        for (const [key, roleName] of Object.entries(SYSTEM_ROLES)) {
-            const isSystemRole = key !== 'VIEWER'; // All except viewer are system roles
-            const roleSql = `
-                INSERT OR IGNORE INTO roles (name, description, is_system_role) 
-                VALUES (?, ?, ?)`;
-            
-            await runQuery(roleSql, [
-                roleName,
-                `System role: ${roleName}`,
-                isSystemRole ? 1 : 0
-            ]);
-            console.log(`✓ Role ${roleName} created`);
-            
-            // If this role has default permissions, assign them
-            if (DEFAULT_ROLE_PERMISSIONS[roleName]) {
-                const role = await getQuery("SELECT id FROM roles WHERE name = ?", [roleName]);
-                const defaultPerms = DEFAULT_ROLE_PERMISSIONS[roleName]();
-                
-                for (const perm of defaultPerms) {
-                    const permission = await getQuery(
-                        "SELECT id FROM permissions WHERE code = ?", 
-                        [perm.permission_code]
-                    );
-                    
-                    if (permission) {
-                        const rolePermSql = `
-                            INSERT OR REPLACE INTO role_permissions 
-                            (role_id, permission_id, can_view, can_create, can_edit, can_delete, can_approve)
-                            VALUES (?, ?, ?, ?, ?, ?, ?)`;
-                        
-                        await runQuery(rolePermSql, [
-                            role.id,
-                            permission.id,
-                            perm.can_view,
-                            perm.can_create,
-                            perm.can_edit,
-                            perm.can_delete,
-                            perm.can_approve
-                        ]);
-                    }
-                }
-                console.log(`  ✓ Default permissions assigned to ${roleName}`);
-            }
-        }
-    } catch (error) {
-        console.error('Error initializing system roles:', error.message);
-    }
-}
-
-// Initialize sample roles and admin user
-async function initializeSampleData() {
-    console.log('\nInitializing sample data...');
-    
-    try {
-        // Create admin role
-        const adminRoleSql = `
-            INSERT OR IGNORE INTO roles (name, description, is_system_role) 
-            VALUES ('Admin', 'System Administrator', 1)`;
-        await runQuery(adminRoleSql);
-        
-        // Get admin role ID
-        const role = await getQuery("SELECT id FROM roles WHERE name = 'Admin'");
-        
-        if (role) {
-            // Create admin user (default password: admin123)
-            const adminUserSql = `
-                INSERT OR IGNORE INTO users 
-                (username, email, password_hash, full_name, role_id, is_active)
-                VALUES (?, ?, ?, ?, ?, 1)`;
-            
-            // Hash for 'admin123'
-            const hashedPassword = '$2b$10$N9qo8uLOickgx2ZMRZoMye9.Z.7H.3Q5J9z7Kz.8Qz8z8z8z8z8z8';
-            
-            await runQuery(adminUserSql, [
-                'admin',
-                'admin@tiremanager.com',
-                hashedPassword,
-                'System Administrator',
-                role.id
-            ]);
-            
-            console.log('✓ Admin user created (username: admin, password: admin123)');
-        }
-    } catch (error) {
-        console.error('Error initializing sample data:', error.message);
-    }
-}
-
 async function initializeDatabase() {
     try {
         // Enable foreign keys
@@ -911,9 +791,9 @@ async function initializeDatabase() {
         await addMissingColumns();
         await createIndexes();
         await initializeChartOfAccounts();
-        await initializeSampleData();
-        await seedPermissions();
-        await initializeSystemRolesAndPermissions();
+       // await initializeSampleData();
+       // await seedPermissions();
+       // await initializeSystemRolesAndPermissions();
         
         console.log('\n✅ Database initialization complete!');
     } catch (error) {
