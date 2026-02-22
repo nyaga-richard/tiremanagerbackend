@@ -1,1 +1,3 @@
-tireManager/database/*.db
+database/*.db
+database/*.db-wal
+database/*.db-shm
