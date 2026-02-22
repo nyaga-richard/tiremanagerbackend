@@ -588,9 +588,7 @@ async function addMissingColumns() {
         { table: 'tires', column: 'grn_item_id', definition: 'INTEGER REFERENCES grn_items(id)' },
         { table: 'tire_movements', column: 'po_item_id', definition: 'INTEGER REFERENCES purchase_order_items(id)' },
         { table: 'tire_movements', column: 'grn_id', definition: 'INTEGER REFERENCES goods_received_notes(id)' },
-        { table: 'supplier_ledger', column: 'accounting_transaction_id', definition: 'INTEGER REFERENCES accounting_transactions(id)' },
-        { table: 'goods_received_notes', column: 'retread_order_id', definition: 'INTEGER REFERENCES retread_orders(id)' },
-        { table: 'grn_items', column: 'retread_order_item_id', definition: 'INTEGER REFERENCES retread_order_items(id)' }
+        { table: 'supplier_ledger', column: 'accounting_transaction_id', definition: 'INTEGER REFERENCES accounting_transactions(id)' }
     ];
     
     for (const update of columnUpdates) {

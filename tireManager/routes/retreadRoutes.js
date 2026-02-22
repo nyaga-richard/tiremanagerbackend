@@ -284,7 +284,7 @@ router.post('/retread-orders', async (req, res) => {
 });
 
 /* =========================
-   GET /api/retread-orders/:id
+   GET /api/retread/retread-orders/:id
 ========================= */
 
 router.get('/retread-orders/:id', async (req, res) => {
@@ -311,6 +311,7 @@ router.get('/retread-orders/:id', async (req, res) => {
         
         const tires = await allAsync(`
             SELECT 
+                roi.id AS order_item_id,
                 t.*,
                 roi.cost,
                 roi.notes as item_notes,
@@ -330,6 +331,12 @@ router.get('/retread-orders/:id', async (req, res) => {
             ORDER BY rt.created_at ASC
         `, [req.params.id]);
         
+        // Format the tires array to include order_item_id at the top level
+        const formattedTires = tires.map(t => ({
+            ...t,
+            order_item_id: t.order_item_id  // Ensure this is at the top level
+        }));
+        
         const response = {
             ...order,
             supplier: {
@@ -340,7 +347,7 @@ router.get('/retread-orders/:id', async (req, res) => {
                 email: order.email,
                 address: order.address
             },
-            tires,
+            tires: formattedTires,
             timeline,
             created_by: order.created_by_name
         };
@@ -437,7 +444,7 @@ router.get('/retread-orders/number/:orderNumber', async (req, res) => {
 });
 
 /* =========================
-   GET /api/retread-orders/:id/receive
+   GET /api/retread/retread-orders/:id/receive
 ========================= */
 
 router.get('/retread-orders/:id/receive', async (req, res) => {
@@ -458,17 +465,33 @@ router.get('/retread-orders/:id/receive', async (req, res) => {
 
         const tires = await allAsync(`
             SELECT 
+                roi.id AS order_item_id,
                 t.id AS tire_id,
                 t.serial_number,
                 t.size,
                 t.brand,
                 t.model,
-                t.retread_count AS previous_retread_count
+                t.retread_count AS previous_retread_count,
+                roi.notes AS order_notes
             FROM retread_order_items roi
             JOIN tires t ON roi.tire_id = t.id
             WHERE roi.retread_order_id = ?
             AND roi.status IN ('PENDING', 'SENT')
         `, [req.params.id]);
+
+        // Format the response
+        const formattedTires = tires.map(t => ({
+            order_item_id: t.order_item_id,
+            tire_id: t.tire_id,              
+            serial_number: t.serial_number,
+            size: t.size,
+            brand: t.brand,
+            model: t.model || '',
+            previous_retread_count: t.previous_retread_count || 0,
+            estimated_cost: t.estimated_cost || 0,
+            tread_depth_new: 16,  // Default value for new retread depth
+            status: 'PENDING'
+        }));
 
         res.json({
             success: true,
@@ -476,17 +499,8 @@ router.get('/retread-orders/:id/receive', async (req, res) => {
                 order_id: order.id,
                 order_number: order.order_number,
                 supplier_id: order.supplier_id,
-                tires: tires.map(t => ({
-                    tire_id: t.tire_id,              
-                    serial_number: t.serial_number,
-                    size: t.size,
-                    brand: t.brand,
-                    model: t.model,
-                    previous_retread_count: t.previous_retread_count,
-                    received_depth: t.tread_depth_new || 0,
-                    quality: 'GOOD',
-                    status: 'PENDING'
-                }))
+                supplier_name: '', // You might want to fetch this separately if needed
+                tires: formattedTires
             }
         });
 
@@ -498,6 +512,7 @@ router.get('/retread-orders/:id/receive', async (req, res) => {
         });
     }
 });
+
 
 /* =========================
    POST /api/retread-orders/:id/receive

@@ -1,7 +1,10 @@
+
+
+
+
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
-const { getAllPermissions,DEFAULT_ROLE_PERMISSIONS, SYSTEM_ROLES } = require('../config/permissions-config');
-const { table } = require('console');
+const { getAllPermissions, DEFAULT_ROLE_PERMISSIONS, SYSTEM_ROLES } = require('../config/permissions-config');
 
 // Create database connection
 const dbPath = path.join(__dirname, '..', 'database', 'tires.db');
@@ -51,7 +54,8 @@ async function createTables() {
             name TEXT UNIQUE NOT NULL,
             description TEXT,
             is_system_role BOOLEAN DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )`,
         
         `CREATE TABLE IF NOT EXISTS users (
@@ -81,7 +85,7 @@ async function createTables() {
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )`,
         
-        // Purchase orders (create this first to avoid circular dependencies)
+        // Purchase orders
         `CREATE TABLE IF NOT EXISTS purchase_orders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             po_number TEXT UNIQUE NOT NULL,
@@ -112,7 +116,9 @@ async function createTables() {
             approved_date TIMESTAMP,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (supplier_id) REFERENCES suppliers(id)
+            FOREIGN KEY (supplier_id) REFERENCES suppliers(id),
+            FOREIGN KEY (created_by) REFERENCES users(id),
+            FOREIGN KEY (approved_by) REFERENCES users(id)
         )`,
         
         `CREATE TABLE IF NOT EXISTS purchase_order_items (
@@ -132,6 +138,101 @@ async function createTables() {
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (po_id) REFERENCES purchase_orders(id) ON DELETE CASCADE
+        )`,
+        
+        // Retread Orders
+        `CREATE TABLE IF NOT EXISTS retread_orders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ro_number TEXT UNIQUE NOT NULL,
+            supplier_id INTEGER NOT NULL,
+            ro_date DATE NOT NULL,
+            expected_delivery_date DATE,
+            delivery_date DATE,
+            status TEXT CHECK(status IN (
+                'DRAFT',
+                'PENDING_APPROVAL',
+                'APPROVED',
+                'ORDERED',
+                'PARTIALLY_RECEIVED',
+                'FULLY_RECEIVED',
+                'CANCELLED',
+                'CLOSED'
+            )) DEFAULT 'DRAFT',
+            total_quantity INTEGER DEFAULT 0,
+            accepted_quantity INTEGER DEFAULT 0,
+            rejected_quantity INTEGER DEFAULT 0,
+            total_cost REAL DEFAULT 0,
+            notes TEXT,
+            terms TEXT,
+            shipping_address TEXT,
+            created_by INTEGER NOT NULL,
+            approved_by INTEGER,
+            approved_date TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (supplier_id) REFERENCES suppliers(id),
+            FOREIGN KEY (created_by) REFERENCES users(id),
+            FOREIGN KEY (approved_by) REFERENCES users(id),
+            CHECK (supplier_id IS NULL OR (SELECT type FROM suppliers WHERE id = supplier_id) = 'RETREAD')
+        )`,
+        
+        `CREATE TABLE IF NOT EXISTS retread_order_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ro_id INTEGER NOT NULL,
+            tire_id INTEGER NOT NULL,
+            size TEXT NOT NULL,
+            brand TEXT,
+            model TEXT,
+            type TEXT CHECK(type IN ('NEW', 'RETREADED')) DEFAULT 'RETREADED',
+            quantity INTEGER DEFAULT 1 CHECK(quantity > 0),
+            unit_cost REAL NOT NULL,
+            line_total REAL GENERATED ALWAYS AS (quantity * unit_cost) VIRTUAL,
+            status TEXT CHECK(status IN (
+                'PENDING',
+                'ACCEPTED',
+                'REJECTED',
+                'RECEIVED'
+            )) DEFAULT 'PENDING',
+            rejection_reason TEXT,
+            received_quantity INTEGER DEFAULT 0,
+            notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (ro_id) REFERENCES retread_orders(id) ON DELETE CASCADE,
+            FOREIGN KEY (tire_id) REFERENCES tires(id)
+        )`,
+        
+        // Retread Receipts
+        `CREATE TABLE IF NOT EXISTS retread_receipts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            receipt_number TEXT UNIQUE NOT NULL,
+            ro_id INTEGER NOT NULL,
+            receipt_date DATE NOT NULL,
+            received_by INTEGER NOT NULL,
+            supplier_invoice_number TEXT,
+            delivery_note_number TEXT,
+            vehicle_number TEXT,
+            driver_name TEXT,
+            notes TEXT,
+            status TEXT CHECK(status IN ('DRAFT', 'COMPLETED', 'CANCELLED')) DEFAULT 'DRAFT',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (ro_id) REFERENCES retread_orders(id),
+            FOREIGN KEY (received_by) REFERENCES users(id)
+        )`,
+        
+        `CREATE TABLE IF NOT EXISTS retread_receipt_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            receipt_id INTEGER NOT NULL,
+            ro_item_id INTEGER NOT NULL,
+            tire_id INTEGER NOT NULL,
+            status TEXT CHECK(status IN ('ACCEPTED', 'REJECTED')) NOT NULL,
+            rejection_reason TEXT,
+            unit_cost REAL,
+            notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (receipt_id) REFERENCES retread_receipts(id) ON DELETE CASCADE,
+            FOREIGN KEY (ro_item_id) REFERENCES retread_order_items(id),
+            FOREIGN KEY (tire_id) REFERENCES tires(id)
         )`,
         
         // Tires table
@@ -157,6 +258,9 @@ async function createTables() {
             po_item_id INTEGER REFERENCES purchase_order_items(id),
             grn_id INTEGER REFERENCES goods_received_notes(id),
             grn_item_id INTEGER REFERENCES grn_items(id),
+            retread_count INTEGER DEFAULT 0,
+            last_retread_date DATE,
+            total_retread_cost REAL DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (supplier_id) REFERENCES suppliers(id)
@@ -219,11 +323,14 @@ async function createTables() {
             created_by TEXT,
             po_id INTEGER REFERENCES purchase_orders(id),
             grn_id INTEGER REFERENCES goods_received_notes(id),
+            ro_id INTEGER REFERENCES retread_orders(id),
+            retread_receipt_id INTEGER REFERENCES retread_receipts(id),
             accounting_transaction_id INTEGER REFERENCES accounting_transactions(id),
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (supplier_id) REFERENCES suppliers(id)
         )`,
         
+        // Tire assignments
         `CREATE TABLE IF NOT EXISTS tire_assignments (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             tire_id INTEGER NOT NULL,
@@ -241,7 +348,7 @@ async function createTables() {
             FOREIGN KEY (position_id) REFERENCES wheel_positions(id)
         )`,
         
-        // Tire movements
+        // Tire movements (will be recreated with updated constraint)
         `CREATE TABLE IF NOT EXISTS tire_movements (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             tire_id INTEGER NOT NULL,
@@ -263,6 +370,12 @@ async function createTables() {
             grn_id INTEGER REFERENCES goods_received_notes(id),
             user_id TEXT NOT NULL,
             notes TEXT,
+            supplier_id INTEGER REFERENCES suppliers(id),
+            vehicle_id INTEGER REFERENCES vehicles(id),
+            supplier_name TEXT,
+            vehicle_number TEXT,
+            ro_id INTEGER REFERENCES retread_orders(id),
+            ro_item_id INTEGER REFERENCES retread_order_items(id),
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (tire_id) REFERENCES tires(id)
         )`,
@@ -279,7 +392,8 @@ async function createTables() {
             notes TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (po_id) REFERENCES purchase_orders(id),
-            FOREIGN KEY (po_item_id) REFERENCES purchase_order_items(id)
+            FOREIGN KEY (po_item_id) REFERENCES purchase_order_items(id),
+            FOREIGN KEY (received_by) REFERENCES users(id)
         )`,
         
         `CREATE TABLE IF NOT EXISTS permissions (
@@ -366,6 +480,7 @@ async function createTables() {
             unit_cost REAL NOT NULL,
             batch_number TEXT,
             serial_numbers TEXT, -- JSON array of serial numbers
+            brand TEXT,
             notes TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (grn_id) REFERENCES goods_received_notes(id) ON DELETE CASCADE,
@@ -465,7 +580,6 @@ async function createTables() {
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )`,
 
-
         `CREATE TABLE IF NOT EXISTS email_settings (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             smtp_host TEXT,
@@ -526,7 +640,6 @@ async function createTables() {
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )`,
 
-
         `CREATE TABLE IF NOT EXISTS tax_rates (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
@@ -538,7 +651,6 @@ async function createTables() {
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )`,
 
-
         `CREATE TABLE IF NOT EXISTS payment_terms (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
@@ -548,7 +660,6 @@ async function createTables() {
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )`,
-
 
         `CREATE TABLE IF NOT EXISTS system_settings_store (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -571,30 +682,131 @@ async function createTables() {
     }
 }
 
+async function updateTireMovementsTable() {
+    console.log('\nUpdating tire_movements table with retread fields...');
+    
+    try {
+        // Check if we need to update the table
+        const tableInfo = await allQuery('PRAGMA table_info(tire_movements)');
+        const hasRoId = tableInfo.some(col => col.name === 'ro_id');
+        
+        if (!hasRoId) {
+            // Create new table with updated structure
+            await runQuery(`
+                CREATE TABLE tire_movements_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    tire_id INTEGER NOT NULL,
+                    from_location TEXT NOT NULL,
+                    to_location TEXT NOT NULL,
+                    movement_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    movement_type TEXT CHECK(movement_type IN (
+                        'PURCHASE_TO_STORE',
+                        'STORE_TO_VEHICLE',
+                        'VEHICLE_TO_STORE',
+                        'STORE_TO_RETREAD_SUPPLIER',
+                        'RETREAD_SUPPLIER_TO_STORE',
+                        'RETREAD_REJECTED_TO_STORE',
+                        'STORE_TO_DISPOSAL',
+                        'INTERNAL_TRANSFER'
+                    )) NOT NULL,
+                    reference_id TEXT,
+                    reference_type TEXT,
+                    po_item_id INTEGER REFERENCES purchase_order_items(id),
+                    grn_id INTEGER REFERENCES goods_received_notes(id),
+                    ro_id INTEGER REFERENCES retread_orders(id),
+                    ro_item_id INTEGER REFERENCES retread_order_items(id),
+                    supplier_id INTEGER REFERENCES suppliers(id),
+                    vehicle_id INTEGER REFERENCES vehicles(id),
+                    supplier_name TEXT,
+                    vehicle_number TEXT,
+                    user_id TEXT NOT NULL,
+                    notes TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (tire_id) REFERENCES tires(id)
+                )
+            `);
+            
+            // Copy data from old table
+            await runQuery(`
+                INSERT INTO tire_movements_new (
+                    id, tire_id, from_location, to_location, movement_date, movement_type,
+                    reference_id, reference_type, po_item_id, grn_id, supplier_id, 
+                    vehicle_id, supplier_name, vehicle_number, user_id, notes, created_at
+                )
+                SELECT 
+                    id, tire_id, from_location, to_location, movement_date, movement_type,
+                    reference_id, reference_type, po_item_id, grn_id, supplier_id,
+                    vehicle_id, supplier_name, vehicle_number, user_id, notes, created_at
+                FROM tire_movements
+            `);
+            
+            // Drop old table and rename new one
+            await runQuery('DROP TABLE tire_movements');
+            await runQuery('ALTER TABLE tire_movements_new RENAME TO tire_movements');
+            
+            // Recreate indexes
+            await createTireMovementsIndexes();
+            
+            console.log('✓ Updated tire_movements table with retread fields');
+        } else {
+            console.log('✓ tire_movements table already has retread fields');
+        }
+    } catch (error) {
+        console.error('Error updating tire_movements table:', error.message);
+    }
+}
+
+async function createTireMovementsIndexes() {
+    const indexes = [
+        "CREATE INDEX IF NOT EXISTS idx_movements_tire ON tire_movements(tire_id)",
+        "CREATE INDEX IF NOT EXISTS idx_movements_date ON tire_movements(movement_date)",
+        "CREATE INDEX IF NOT EXISTS idx_movements_po_item ON tire_movements(po_item_id)",
+        "CREATE INDEX IF NOT EXISTS idx_movements_grn ON tire_movements(grn_id)",
+        "CREATE INDEX IF NOT EXISTS idx_movements_ro ON tire_movements(ro_id)",
+        "CREATE INDEX IF NOT EXISTS idx_movements_ro_item ON tire_movements(ro_item_id)"
+    ];
+    
+    for (const index of indexes) {
+        try {
+            await runQuery(index);
+        } catch (error) {
+            console.error(`Error creating index: ${error.message}`);
+        }
+    }
+}
+
 async function addMissingColumns() {
     console.log('\nChecking for missing columns...');
     
-    // List of columns to add if they don't exist
     const columnUpdates = [
-        // Note: We removed most columns since they're now included in CREATE TABLE statements
-        { table: 'grn_items', column: 'brand', definition: 'TEXT' },   
-        {table: 'tire_movements', column: 'supplier_id', definition: 'INTEGER REFERENCES suppliers(id)'},
-        {table: 'tire_movements', column: 'vehicle_id', definition: 'INTEGER REFERENCES vehicles(id)'},
-        {table: 'tire_movements', column: 'supplier_name', definition: 'TEXT'},
-        {table: 'tire_movements', column: 'vehicle_number', definition: 'TEXT'},
+        { table: 'grn_items', column: 'brand', definition: 'TEXT' },
+        { table: 'tire_movements', column: 'supplier_id', definition: 'INTEGER REFERENCES suppliers(id)' },
+        { table: 'tire_movements', column: 'vehicle_id', definition: 'INTEGER REFERENCES vehicles(id)' },
+        { table: 'tire_movements', column: 'supplier_name', definition: 'TEXT' },
+        { table: 'tire_movements', column: 'vehicle_number', definition: 'TEXT' },
+        { table: 'tire_movements', column: 'ro_id', definition: 'INTEGER REFERENCES retread_orders(id)' },
+        { table: 'tire_movements', column: 'ro_item_id', definition: 'INTEGER REFERENCES retread_order_items(id)' },
         { table: 'roles', column: 'updated_at', definition: 'TIMESTAMP' },
         { table: 'tires', column: 'po_item_id', definition: 'INTEGER REFERENCES purchase_order_items(id)' },
         { table: 'tires', column: 'grn_id', definition: 'INTEGER REFERENCES goods_received_notes(id)' },
         { table: 'tires', column: 'grn_item_id', definition: 'INTEGER REFERENCES grn_items(id)' },
-        { table: 'tire_movements', column: 'po_item_id', definition: 'INTEGER REFERENCES purchase_order_items(id)' },
-        { table: 'tire_movements', column: 'grn_id', definition: 'INTEGER REFERENCES goods_received_notes(id)' },
+        { table: 'tires', column: 'retread_count', definition: 'INTEGER DEFAULT 0' },
+        { table: 'tires', column: 'last_retread_date', definition: 'DATE' },
+        { table: 'tires', column: 'total_retread_cost', definition: 'REAL DEFAULT 0' },
         { table: 'supplier_ledger', column: 'accounting_transaction_id', definition: 'INTEGER REFERENCES accounting_transactions(id)' },
-        { table: 'goods_received_notes', column: 'retread_order_id', definition: 'INTEGER REFERENCES retread_orders(id)' },
-        { table: 'grn_items', column: 'retread_order_item_id', definition: 'INTEGER REFERENCES retread_order_items(id)' }
+        { table: 'supplier_ledger', column: 'ro_id', definition: 'INTEGER REFERENCES retread_orders(id)' },
+        { table: 'supplier_ledger', column: 'retread_receipt_id', definition: 'INTEGER REFERENCES retread_receipts(id)' }
     ];
     
     for (const update of columnUpdates) {
         try {
+            // Check if table exists
+            const tables = await allQuery("SELECT name FROM sqlite_master WHERE type='table' AND name=?", [update.table]);
+            if (tables.length === 0) {
+                console.log(`Table ${update.table} doesn't exist yet, skipping column check`);
+                continue;
+            }
+            
             // Check if column exists
             const tableInfo = await allQuery(`PRAGMA table_info(${update.table})`);
             const columnExists = tableInfo.some(col => col.name === update.column);
@@ -622,12 +834,15 @@ async function createIndexes() {
         "CREATE INDEX IF NOT EXISTS idx_tires_size ON tires(size)",
         "CREATE INDEX IF NOT EXISTS idx_tires_po_item ON tires(po_item_id)",
         "CREATE INDEX IF NOT EXISTS idx_tires_grn ON tires(grn_id)",
+        "CREATE INDEX IF NOT EXISTS idx_tires_retread ON tires(retread_count)",
         
         // Movements indexes
         "CREATE INDEX IF NOT EXISTS idx_movements_tire ON tire_movements(tire_id)",
         "CREATE INDEX IF NOT EXISTS idx_movements_date ON tire_movements(movement_date)",
         "CREATE INDEX IF NOT EXISTS idx_movements_po_item ON tire_movements(po_item_id)",
         "CREATE INDEX IF NOT EXISTS idx_movements_grn ON tire_movements(grn_id)",
+        "CREATE INDEX IF NOT EXISTS idx_movements_ro ON tire_movements(ro_id)",
+        "CREATE INDEX IF NOT EXISTS idx_movements_ro_item ON tire_movements(ro_item_id)",
         
         // Assignments indexes
         "CREATE INDEX IF NOT EXISTS idx_assignments_tire ON tire_assignments(tire_id)",
@@ -638,6 +853,7 @@ async function createIndexes() {
         "CREATE INDEX IF NOT EXISTS idx_supplier_ledger ON supplier_ledger(supplier_id, date)",
         "CREATE INDEX IF NOT EXISTS idx_supplier_ledger_po ON supplier_ledger(po_id)",
         "CREATE INDEX IF NOT EXISTS idx_supplier_ledger_grn ON supplier_ledger(grn_id)",
+        "CREATE INDEX IF NOT EXISTS idx_supplier_ledger_ro ON supplier_ledger(ro_id)",
         "CREATE INDEX IF NOT EXISTS idx_supplier_ledger_accounting ON supplier_ledger(accounting_transaction_id)",
         
         // Purchase orders indexes
@@ -647,6 +863,26 @@ async function createIndexes() {
         "CREATE INDEX IF NOT EXISTS idx_po_date ON purchase_orders(po_date)",
         "CREATE INDEX IF NOT EXISTS idx_po_created_by ON purchase_orders(created_by)",
         "CREATE INDEX IF NOT EXISTS idx_po_approved_by ON purchase_orders(approved_by)",
+        
+        // Retread orders indexes
+        "CREATE INDEX IF NOT EXISTS idx_ro_number ON retread_orders(ro_number)",
+        "CREATE INDEX IF NOT EXISTS idx_ro_status ON retread_orders(status)",
+        "CREATE INDEX IF NOT EXISTS idx_ro_supplier ON retread_orders(supplier_id)",
+        "CREATE INDEX IF NOT EXISTS idx_ro_date ON retread_orders(ro_date)",
+        
+        // Retread order items indexes
+        "CREATE INDEX IF NOT EXISTS idx_ro_items_ro ON retread_order_items(ro_id)",
+        "CREATE INDEX IF NOT EXISTS idx_ro_items_tire ON retread_order_items(tire_id)",
+        "CREATE INDEX IF NOT EXISTS idx_ro_items_status ON retread_order_items(status)",
+        
+        // Retread receipts indexes
+        "CREATE INDEX IF NOT EXISTS idx_retread_receipts_ro ON retread_receipts(ro_id)",
+        "CREATE INDEX IF NOT EXISTS idx_retread_receipts_date ON retread_receipts(receipt_date)",
+        "CREATE INDEX IF NOT EXISTS idx_retread_receipts_status ON retread_receipts(status)",
+        
+        // Retread receipt items indexes
+        "CREATE INDEX IF NOT EXISTS idx_retread_receipt_items_receipt ON retread_receipt_items(receipt_id)",
+        "CREATE INDEX IF NOT EXISTS idx_retread_receipt_items_tire ON retread_receipt_items(tire_id)",
         
         // Purchase order items indexes
         "CREATE INDEX IF NOT EXISTS idx_po_items_po ON purchase_order_items(po_id)",
@@ -735,7 +971,9 @@ async function initializeChartOfAccounts() {
         // Assets
         { code: '1000', name: 'Cash', type: 'ASSET', normal_balance: 'DEBIT', description: 'Cash in bank' },
         { code: '1100', name: 'Accounts Receivable', type: 'ASSET', normal_balance: 'DEBIT', description: 'Amounts owed by customers' },
-        { code: '1200', name: 'Inventory', type: 'ASSET', normal_balance: 'DEBIT', description: 'Tire inventory' },
+        { code: '1200', name: 'Inventory - New Tires', type: 'ASSET', normal_balance: 'DEBIT', description: 'New tire inventory' },
+        { code: '1210', name: 'Inventory - Retreaded Tires', type: 'ASSET', normal_balance: 'DEBIT', description: 'Retreaded tire inventory' },
+        { code: '1220', name: 'Inventory - Used Tires', type: 'ASSET', normal_balance: 'DEBIT', description: 'Used tire inventory awaiting retread' },
         { code: '1300', name: 'Prepaid Expenses', type: 'ASSET', normal_balance: 'DEBIT', description: 'Prepaid items' },
         
         // Liabilities
@@ -748,18 +986,21 @@ async function initializeChartOfAccounts() {
         { code: '3100', name: 'Retained Earnings', type: 'EQUITY', normal_balance: 'CREDIT', description: 'Accumulated profits' },
         
         // Revenue
-        { code: '4000', name: 'Sales Revenue', type: 'REVENUE', normal_balance: 'CREDIT', description: 'Revenue from sales' },
-        { code: '4100', name: 'Service Revenue', type: 'REVENUE', normal_balance: 'CREDIT', description: 'Revenue from services' },
+        { code: '4000', name: 'Sales Revenue - New Tires', type: 'REVENUE', normal_balance: 'CREDIT', description: 'Revenue from new tire sales' },
+        { code: '4100', name: 'Sales Revenue - Retreaded Tires', type: 'REVENUE', normal_balance: 'CREDIT', description: 'Revenue from retreaded tire sales' },
+        { code: '4200', name: 'Service Revenue', type: 'REVENUE', normal_balance: 'CREDIT', description: 'Revenue from services' },
         
         // Expenses
-        { code: '5000', name: 'Cost of Goods Sold', type: 'EXPENSE', normal_balance: 'DEBIT', description: 'Cost of inventory sold' },
-        { code: '5100', name: 'Purchases', type: 'EXPENSE', normal_balance: 'DEBIT', description: 'Purchase of tires' },
-        { code: '5200', name: 'Shipping Expense', type: 'EXPENSE', normal_balance: 'DEBIT', description: 'Shipping costs' },
-        { code: '5300', name: 'Salaries Expense', type: 'EXPENSE', normal_balance: 'DEBIT', description: 'Employee salaries' },
-        { code: '5400', name: 'Rent Expense', type: 'EXPENSE', normal_balance: 'DEBIT', description: 'Rent payments' },
-        { code: '5500', name: 'Utilities Expense', type: 'EXPENSE', normal_balance: 'DEBIT', description: 'Utility bills' },
-        { code: '5600', name: 'Depreciation Expense', type: 'EXPENSE', normal_balance: 'DEBIT', description: 'Asset depreciation' },
-        { code: '5700', name: 'Interest Expense', type: 'EXPENSE', normal_balance: 'DEBIT', description: 'Interest payments' }
+        { code: '5000', name: 'Cost of Goods Sold - New Tires', type: 'EXPENSE', normal_balance: 'DEBIT', description: 'Cost of new tires sold' },
+        { code: '5100', name: 'Cost of Goods Sold - Retreaded Tires', type: 'EXPENSE', normal_balance: 'DEBIT', description: 'Cost of retreaded tires sold' },
+        { code: '5200', name: 'Purchases - New Tires', type: 'EXPENSE', normal_balance: 'DEBIT', description: 'Purchase of new tires' },
+        { code: '5300', name: 'Retread Service Cost', type: 'EXPENSE', normal_balance: 'DEBIT', description: 'Cost of retread services' },
+        { code: '5400', name: 'Shipping Expense', type: 'EXPENSE', normal_balance: 'DEBIT', description: 'Shipping costs' },
+        { code: '5500', name: 'Salaries Expense', type: 'EXPENSE', normal_balance: 'DEBIT', description: 'Employee salaries' },
+        { code: '5600', name: 'Rent Expense', type: 'EXPENSE', normal_balance: 'DEBIT', description: 'Rent payments' },
+        { code: '5700', name: 'Utilities Expense', type: 'EXPENSE', normal_balance: 'DEBIT', description: 'Utility bills' },
+        { code: '5800', name: 'Depreciation Expense', type: 'EXPENSE', normal_balance: 'DEBIT', description: 'Asset depreciation' },
+        { code: '5900', name: 'Interest Expense', type: 'EXPENSE', normal_balance: 'DEBIT', description: 'Interest payments' }
     ];
 
     for (const account of accounts) {
@@ -783,6 +1024,236 @@ async function initializeChartOfAccounts() {
     }
 }
 
+async function seedPermissions() {
+    console.log('\nSeeding permissions...');
+    
+    const permissions = getAllPermissions();
+    
+    for (const perm of permissions) {
+        try {
+            const sql = `
+                INSERT OR IGNORE INTO permissions 
+                (category, code, name, description)
+                VALUES (?, ?, ?, ?)`;
+            
+            await runQuery(sql, [
+                perm.category,
+                perm.code,
+                perm.name,
+                `Permission to ${perm.name.toLowerCase()}`
+            ]);
+            console.log(`✓ Permission ${perm.code} seeded`);
+        } catch (error) {
+            console.error(`Error seeding permission ${perm.code}:`, error.message);
+        }
+    }
+}
+
+async function initializeSystemRolesAndPermissions() {
+    console.log('\nInitializing system roles and permissions...');
+    
+    try {
+        // Create system roles
+        for (const [key, roleName] of Object.entries(SYSTEM_ROLES)) {
+            const isSystemRole = key !== 'VIEWER'; // All except viewer are system roles
+            const roleSql = `
+                INSERT OR IGNORE INTO roles (name, description, is_system_role) 
+                VALUES (?, ?, ?)`;
+            
+            await runQuery(roleSql, [
+                roleName,
+                `System role: ${roleName}`,
+                isSystemRole ? 1 : 0
+            ]);
+            console.log(`✓ Role ${roleName} created`);
+            
+            // If this role has default permissions, assign them
+            if (DEFAULT_ROLE_PERMISSIONS[roleName]) {
+                const role = await getQuery("SELECT id FROM roles WHERE name = ?", [roleName]);
+                const defaultPerms = DEFAULT_ROLE_PERMISSIONS[roleName]();
+                
+                for (const perm of defaultPerms) {
+                    const permission = await getQuery(
+                        "SELECT id FROM permissions WHERE code = ?", 
+                        [perm.permission_code]
+                    );
+                    
+                    if (permission) {
+                        const rolePermSql = `
+                            INSERT OR REPLACE INTO role_permissions 
+                            (role_id, permission_id, can_view, can_create, can_edit, can_delete, can_approve)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)`;
+                        
+                        await runQuery(rolePermSql, [
+                            role.id,
+                            permission.id,
+                            perm.can_view || 0,
+                            perm.can_create || 0,
+                            perm.can_edit || 0,
+                            perm.can_delete || 0,
+                            perm.can_approve || 0
+                        ]);
+                    }
+                }
+                console.log(`  ✓ Default permissions assigned to ${roleName}`);
+            }
+        }
+    } catch (error) {
+        console.error('Error initializing system roles:', error.message);
+    }
+}
+
+async function initializeSampleData() {
+    console.log('\nInitializing sample data...');
+    
+    try {
+        // Create admin role if it doesn't exist
+        const adminRoleSql = `
+            INSERT OR IGNORE INTO roles (name, description, is_system_role) 
+            VALUES ('Admin', 'System Administrator', 1)`;
+        await runQuery(adminRoleSql);
+        
+        // Get admin role ID
+        const role = await getQuery("SELECT id FROM roles WHERE name = 'Admin'");
+        
+        if (role) {
+            // Create admin user (default password: admin123)
+            const adminUserSql = `
+                INSERT OR IGNORE INTO users 
+                (username, email, password_hash, full_name, role_id, is_active)
+                VALUES (?, ?, ?, ?, ?, 1)`;
+            
+            // Hash for 'admin123' - this is a sample hash, you should use proper bcrypt
+            const hashedPassword = '$2b$10$N9qo8uLOickgx2ZMRZoMye9.Z.7H.3Q5J9z7Kz.8Qz8z8z8z8z8z8';
+            
+            await runQuery(adminUserSql, [
+                'admin',
+                'admin@tiremanager.com',
+                hashedPassword,
+                'System Administrator',
+                role.id
+            ]);
+            
+            console.log('✓ Admin user created (username: admin, password: admin123)');
+        }
+
+        // Create sample retread supplier
+        const retreadSupplierSql = `
+            INSERT OR IGNORE INTO suppliers (name, type, contact_person, phone, email, address)
+            VALUES ('Premier Retreaders Ltd', 'RETREAD', 'John Smith', '+254 700 123456', 'info@premierretreaders.com', 'Nairobi Industrial Area')`;
+        await runQuery(retreadSupplierSql);
+        console.log('✓ Sample retread supplier created');
+
+        // Create sample tire supplier
+        const tireSupplierSql = `
+            INSERT OR IGNORE INTO suppliers (name, type, contact_person, phone, email, address)
+            VALUES ('Tire Distributors Ltd', 'TIRE', 'Jane Doe', '+254 711 789012', 'sales@tiredistributors.com', 'Mombasa Road, Nairobi')`;
+        await runQuery(tireSupplierSql);
+        console.log('✓ Sample tire supplier created');
+
+        // Create sample inventory catalog items
+        const catalogItems = [
+            { size: '295/75R22.5', brand: 'Michelin', model: 'XZA2', type: 'NEW', min_stock: 10, reorder_point: 5 },
+            { size: '11R22.5', brand: 'Bridgestone', model: 'M724', type: 'NEW', min_stock: 15, reorder_point: 8 },
+            { size: '12R22.5', brand: 'Goodyear', model: 'G622', type: 'RETREADED', min_stock: 20, reorder_point: 10 },
+            { size: '315/80R22.5', brand: 'Michelin', model: 'XDN2', type: 'NEW', min_stock: 8, reorder_point: 4 }
+        ];
+
+        for (const item of catalogItems) {
+            const catalogSql = `
+                INSERT OR IGNORE INTO inventory_catalog 
+                (size, brand, model, type, min_stock, reorder_point, is_active)
+                VALUES (?, ?, ?, ?, ?, ?, 1)`;
+            
+            await runQuery(catalogSql, [
+                item.size,
+                item.brand,
+                item.model,
+                item.type,
+                item.min_stock,
+                item.reorder_point
+            ]);
+        }
+        console.log('✓ Sample inventory catalog created');
+
+        // Create sample vehicles
+        const vehicles = [
+            { vehicle_number: 'KCA 001A', make: 'Scania', model: 'R500', year: 2022, wheel_config: '6x4' },
+            { vehicle_number: 'KCB 002B', make: 'Volvo', model: 'FH16', year: 2021, wheel_config: '4x2' },
+            { vehicle_number: 'KCD 003C', make: 'Mercedes', model: 'Actros', year: 2023, wheel_config: '6x2' }
+        ];
+
+        for (const vehicle of vehicles) {
+            const vehicleSql = `
+                INSERT OR IGNORE INTO vehicles 
+                (vehicle_number, make, model, year, wheel_config, status)
+                VALUES (?, ?, ?, ?, ?, 'ACTIVE')`;
+            
+            await runQuery(vehicleSql, [
+                vehicle.vehicle_number,
+                vehicle.make,
+                vehicle.model,
+                vehicle.year,
+                vehicle.wheel_config
+            ]);
+        }
+        console.log('✓ Sample vehicles created');
+
+        // Create wheel positions for vehicles
+        const vehiclesList = await allQuery("SELECT id, vehicle_number, wheel_config FROM vehicles");
+        for (const vehicle of vehiclesList) {
+            const positions = [
+                { code: 'FL', name: 'Front Left', axle: 1 },
+                { code: 'FR', name: 'Front Right', axle: 1 },
+                { code: 'R1L', name: 'Rear 1 Left', axle: 2 },
+                { code: 'R1R', name: 'Rear 1 Right', axle: 2 },
+                { code: 'R2L', name: 'Rear 2 Left', axle: 3 },
+                { code: 'R2R', name: 'Rear 2 Right', axle: 3 }
+            ];
+
+            for (const pos of positions) {
+                const posSql = `
+                    INSERT OR IGNORE INTO wheel_positions 
+                    (vehicle_id, position_code, position_name, axle_number)
+                    VALUES (?, ?, ?, ?)`;
+                
+                await runQuery(posSql, [
+                    vehicle.id,
+                    pos.code,
+                    pos.name,
+                    pos.axle
+                ]);
+            }
+        }
+        console.log('✓ Wheel positions created');
+
+        // Create sample used tires (for retread)
+        const usedTires = [
+            { serial: 'T2024001', size: '295/75R22.5', brand: 'Michelin', model: 'XZA2' },
+            { serial: 'T2024002', size: '11R22.5', brand: 'Bridgestone', model: 'M724' },
+            { serial: 'T2024003', size: '12R22.5', brand: 'Goodyear', model: 'G622' }
+        ];
+
+        for (const tire of usedTires) {
+            const tireSql = `
+                INSERT OR IGNORE INTO tires 
+                (serial_number, size, brand, model, type, status, current_location)
+                VALUES (?, ?, ?, ?, 'RETREADED', 'USED_STORE', 'Used Tire Store')`;
+            
+            await runQuery(tireSql, [
+                tire.serial,
+                tire.size,
+                tire.brand,
+                tire.model
+            ]);
+        }
+        console.log('✓ Sample used tires created');
+
+    } catch (error) {
+        console.error('Error initializing sample data:', error.message);
+    }
+}
+
 async function initializeDatabase() {
     try {
         // Enable foreign keys
@@ -790,12 +1261,27 @@ async function initializeDatabase() {
         
         // Create tables
         await createTables();
+        
+        // Add missing columns
         await addMissingColumns();
+        
+        // Update tire movements table with retread fields
+        await updateTireMovementsTable();
+        
+        // Create indexes
         await createIndexes();
+        
+        // Initialize chart of accounts
         await initializeChartOfAccounts();
-       // await initializeSampleData();
-       // await seedPermissions();
-       // await initializeSystemRolesAndPermissions();
+        
+        // Seed permissions
+        await seedPermissions();
+        
+        // Initialize system roles and permissions
+        await initializeSystemRolesAndPermissions();
+        
+        // Initialize sample data
+        await initializeSampleData();
         
         console.log('\n✅ Database initialization complete!');
     } catch (error) {
@@ -811,3 +1297,11 @@ async function initializeDatabase() {
         });
     }
 }
+
+// Export the database functions
+module.exports = {
+    db,
+    runQuery,
+    getQuery,
+    allQuery
+};
