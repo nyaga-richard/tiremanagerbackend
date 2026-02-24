@@ -1,9 +1,25 @@
 const express = require('express');
 const router = express.Router();
 const Vehicle = require('../models/Vehicle');
+const AuthMiddleware = require('../middleware/auth-middleware');
+const db = require('../config/database');
+
+// Initialize auth middleware
+const auth = new AuthMiddleware(db);
+
+
+// Apply authentication to all routes
+router.use(auth.authenticate);
+
+// Permission middleware// Permission middleware
+const checkPermission = (permissionCode, action = 'view') => {
+    return auth.checkPermission(permissionCode, action);
+};
 
 // Create vehicle
-router.post('/', async (req, res) => {
+router.post('/',
+    checkPermission('vehicle.create'),
+     async (req, res) => {
     try {
         const vehicleId = await Vehicle.create(req.body);
         
@@ -21,7 +37,9 @@ router.post('/', async (req, res) => {
 });
 
 // Get all vehicles
-router.get('/', async (req, res) => {
+router.get('/',
+    checkPermission('vehicle.view'),
+     async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 10;
@@ -47,7 +65,9 @@ router.get('/', async (req, res) => {
 });
 
 // Get vehicle details
-router.get('/:id', async (req, res) => {
+router.get('/:id',
+    checkPermission('vehicle.view'),
+     async (req, res) => {
     try {
         const vehicle = await Vehicle.getVehicleWithPositions(req.params.id);
         if (!vehicle) {
@@ -90,7 +110,9 @@ router.get('/:id', async (req, res) => {
 });
 
 // Update vehicle details
-router.put('/:id', async (req, res) => {
+router.put('/:id',
+    checkPermission('vehicle.update'),
+     async (req, res) => {
     try {
         const {
             vehicle_number,
@@ -144,7 +166,9 @@ router.put('/:id', async (req, res) => {
 });
 
 // Update vehicle odometer
-router.patch('/:id/odometer', async (req, res) => {
+router.patch('/:id/odometer',
+    checkPermission('vehicle.update'),
+     async (req, res) => {
     try {
         const { current_odometer } = req.body;
         const db = require('../config/database');
@@ -168,7 +192,9 @@ router.patch('/:id/odometer', async (req, res) => {
 });
 
 // Retire a vehicle
-router.post('/:id/retire', async (req, res) => {
+router.post('/:id/retire',
+    checkPermission('vehicle.update'),
+     async (req, res) => {
     try {
         const vehicleId = req.params.id;
         const { reason, retirement_date, retired_by } = req.body;
@@ -346,7 +372,9 @@ router.post('/:id/retire', async (req, res) => {
 });
 
 // Reactivate a retired vehicle
-router.post('/:id/reactivate', async (req, res) => {
+router.post('/:id/reactivate',
+    checkPermission('vehicle.update'),    
+    async (req, res) => {
     try {
         const vehicleId = req.params.id;
         const { reason, reactivated_by } = req.body;
@@ -418,7 +446,9 @@ router.post('/:id/reactivate', async (req, res) => {
 });
 
 // Get retired vehicles
-router.get('/retired/list', async (req, res) => {
+router.get('/retired/list',
+     checkPermission('vehicle.view'),
+      async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 10;

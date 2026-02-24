@@ -20,8 +20,12 @@
     "http-errors": "~1.6.3",
     "jsonwebtoken": "^9.0.3",
     "morgan": "~1.9.1",
+    "nodemailer": "^8.0.1",
     "pug": "2.0.0-beta11",
     "sqlite3": "~5.1.6",
     "uuid": "^13.0.0"
+  },
+  "devDependencies": {
+    "@types/nodemailer": "^7.0.11"
   }
 }

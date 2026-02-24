@@ -231,7 +231,7 @@ class GoodsReceivedNote {
                             grnSql = `
                                 INSERT INTO goods_received_notes 
                                 (grn_number, po_id, receipt_date, received_by, supplier_invoice_number, delivery_note_number,
-                                 vehicle_number, driver_name, notes, status)
+                                vehicle_number, driver_name, notes, status)
                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'COMPLETED')`;
                             
                             grnParams = [
@@ -249,7 +249,7 @@ class GoodsReceivedNote {
                             grnSql = `
                                 INSERT INTO goods_received_notes 
                                 (grn_number, retread_order_id, receipt_date, received_by, supplier_invoice_number, delivery_note_number,
-                                 vehicle_number, driver_name, notes, status)
+                                vehicle_number, driver_name, notes, status)
                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'COMPLETED')`;
                             
                             grnParams = [
@@ -350,7 +350,7 @@ class GoodsReceivedNote {
                                     const grnItemSql = `
                                         INSERT INTO grn_items 
                                         (grn_id, po_item_id, retread_order_item_id, quantity_received, unit_cost, 
-                                         batch_number, serial_numbers, notes, brand)
+                                        batch_number, serial_numbers, notes, brand)
                                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
                                     const serialNumbersJson = JSON.stringify(serial_numbers || []);
@@ -484,9 +484,9 @@ class GoodsReceivedNote {
                                                         const tireSql = `
                                                             INSERT INTO tires 
                                                             (serial_number, size, brand, model, type,
-                                                             purchase_cost, supplier_id, purchase_date,
-                                                             po_item_id, grn_id, grn_item_id,
-                                                             status, current_location)
+                                                            purchase_cost, supplier_id, purchase_date,
+                                                            po_item_id, grn_id, grn_item_id,
+                                                            status, current_location)
                                                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'IN_STORE', 'WAREHOUSE')`;
 
                                                         db.run(tireSql, [
@@ -523,7 +523,7 @@ class GoodsReceivedNote {
                                                             const movementSql = `
                                                                 INSERT INTO tire_movements 
                                                                 (tire_id, from_location, to_location, movement_type,
-                                                                 reference_id, reference_type, po_item_id, grn_id, user_id)
+                                                                reference_id, reference_type, po_item_id, grn_id, user_id)
                                                                 VALUES (?, 'SUPPLIER', 'WAREHOUSE', 'PURCHASE_TO_STORE',
                                                                         ?, 'GRN', ?, ?, ?)`;
 
@@ -548,17 +548,21 @@ class GoodsReceivedNote {
 
                                                     createNextTire(0);
                                                 } else {
-                                                    // For retread orders, update existing tire
+                                                    // For retread orders, update existing tire - CHANGED HERE
                                                     const updateTireSql = `
                                                         UPDATE tires 
                                                         SET retread_count = COALESCE(retread_count, 0) + 1,
-                                                            status = ?
+                                                            type = 'RETREADED',  /* Set type to RETREAD */
+                                                            status = ?,
+                                                            supplier_id = ?
                                                         WHERE id = ?`;
 
-                                                    const newTireStatus = condition === 'REJECTED' ? 'DISPOSED' : 'USED_STORE';
-
+                                                    // Set status to IN_STORE for accepted retreads, DISPOSED for rejected ones
+                                                    const newTireStatus = condition === 'REJECTED' ? 'DISPOSED' : 'IN_STORE';
+                                                    
                                                     db.run(updateTireSql, [
                                                         newTireStatus,
+                                                        order.supplier_id,
                                                         itemDetails.tire_id
                                                     ], function(err) {
                                                         if (err) {
@@ -572,10 +576,11 @@ class GoodsReceivedNote {
                                                         const movementSql = `
                                                             INSERT INTO tire_movements 
                                                             (tire_id, from_location, to_location, movement_type,
-                                                             reference_id, reference_type, user_id, notes)
+                                                            reference_id, reference_type, user_id, notes)
                                                             VALUES (?, 'AT_RETREAD_SUPPLIER', ?, ?, ?, ?, ?, ?)`;
 
-                                                        const toLocation = condition === 'REJECTED' ? 'DISPOSED' : 'USED_STORE';
+                                                        // Set destination location based on condition
+                                                        const toLocation = condition === 'REJECTED' ? 'DISPOSED' : 'WAREHOUSE';
                                                         const movementType = condition === 'REJECTED' 
                                                             ? 'STORE_TO_DISPOSAL'  
                                                             : 'RETREAD_SUPPLIER_TO_STORE';  
@@ -601,7 +606,8 @@ class GoodsReceivedNote {
                                                                 serial_number: itemDetails.existing_serial,
                                                                 retread_order_item_id: itemId,
                                                                 brand: brand || itemDetails.tire_brand,
-                                                                condition: condition
+                                                                condition: condition,
+                                                                type: 'RETREADED'  // Add type to processed tire info
                                                             });
 
                                                             processedItems.push({
@@ -811,29 +817,30 @@ class GoodsReceivedNote {
         // This is primarily for purchase orders
         // For retread orders, inventory is handled differently
         const sql = `
-            INSERT OR REPLACE INTO inventory_catalog 
-            (size, brand, model, type, current_stock, 
-             last_purchase_date, last_purchase_price, supplier_id)
-            SELECT 
-                poi.size,
-                COALESCE(gi.brand, poi.brand) as brand,
-                poi.model,
-                poi.type,
-                COALESCE(SUM(gi.quantity_received), 0) as received_qty,
-                MAX(grn.receipt_date) as last_receipt_date,
-                AVG(gi.unit_cost) as avg_cost,
-                po.supplier_id
-            FROM grn_items gi
-            JOIN purchase_order_items poi ON gi.po_item_id = poi.id
-            JOIN goods_received_notes grn ON gi.grn_id = grn.id
-            JOIN purchase_orders po ON grn.po_id = po.id
-            WHERE gi.grn_id = ? AND gi.po_item_id IS NOT NULL
-            GROUP BY poi.size, COALESCE(gi.brand, poi.brand), poi.model, poi.type
-            ON CONFLICT(size, brand, model, type) DO UPDATE SET
-                current_stock = current_stock + EXCLUDED.current_stock,
-                last_purchase_date = EXCLUDED.last_purchase_date,
-                last_purchase_price = EXCLUDED.last_purchase_price,
-                `;
+        INSERT INTO inventory_catalog 
+        (size, brand, model, type, current_stock, 
+        last_purchase_date, last_purchase_price, supplier_id)
+        SELECT 
+            poi.size,
+            COALESCE(gi.brand, poi.brand),
+            poi.model,
+            poi.type,
+            COALESCE(SUM(gi.quantity_received), 0),
+            MAX(grn.receipt_date),
+            AVG(gi.unit_cost),
+            po.supplier_id
+        FROM grn_items gi
+        JOIN purchase_order_items poi ON gi.po_item_id = poi.id
+        JOIN goods_received_notes grn ON gi.grn_id = grn.id
+        JOIN purchase_orders po ON grn.po_id = po.id
+        WHERE gi.grn_id = ? AND gi.po_item_id IS NOT NULL
+        GROUP BY poi.size, COALESCE(gi.brand, poi.brand), poi.model, poi.type
+        ON CONFLICT(size, brand, model, type) DO UPDATE SET
+            current_stock = inventory_catalog.current_stock + EXCLUDED.current_stock,
+            last_purchase_date = EXCLUDED.last_purchase_date,
+            last_purchase_price = EXCLUDED.last_purchase_price,
+            supplier_id = EXCLUDED.supplier_id
+        `;
 
         return new Promise((resolve, reject) => {
             db.run(sql, [grnId], function(err) {
