@@ -891,6 +891,7 @@ class TireController {
                 to_location: 'DISPOSAL',
                 movement_type: 'STORE_TO_DISPOSAL',
                 user_id,
+                disposal_date,
                 notes: `Disposed: ${disposal_reason}`
             });
 
@@ -1051,6 +1052,384 @@ class TireController {
             res.status(500).json({ error: 'Failed to fetch transactions' });
         }
     }
+
+    // Add these methods to your TireController class
+
+/**
+ * Get disposed tires with filtering and pagination
+ */
+static async getDisposedTires(req, res) {
+    try {
+        const {
+            start_date,
+            end_date,
+            reason,
+            method,
+            limit = 20,
+            offset = 0,
+            search
+        } = req.query;
+
+        const result = await Tire.getDisposedTires({
+            start_date,
+            end_date,
+            reason,
+            method,
+            limit: parseInt(limit),
+            offset: parseInt(offset),
+            search
+        });
+
+        res.json({
+            success: true,
+            data: result.data,
+            pagination: result.pagination
+        });
+    } catch (error) {
+        console.error('Error getting disposed tires:', error);
+        res.status(500).json({ error: error.message });
+    }
+}
+
+/**
+ * Get disposed tires summary statistics
+ */
+static async getDisposedTiresSummary(req, res) {
+    try {
+        const summary = await Tire.getDisposedTiresSummary();
+        res.json({
+            success: true,
+            data: summary
+        });
+    } catch (error) {
+        console.error('Error getting disposed tires summary:', error);
+        res.status(500).json({ error: error.message });
+    }
+}
+
+/**
+ * Get disposed tires trend analysis
+ */
+static async getDisposedTiresTrend(req, res) {
+    try {
+        const { months = 12 } = req.query;
+        const trend = await Tire.getDisposedTiresTrend(parseInt(months));
+        res.json({
+            success: true,
+            data: trend
+        });
+    } catch (error) {
+        console.error('Error getting disposed tires trend:', error);
+        res.status(500).json({ error: error.message });
+    }
+}
+
+/**
+ * Get disposed tires grouped by reason
+ */
+static async getDisposedTiresByReason(req, res) {
+    try {
+        const { year } = req.query;
+        const data = await Tire.getDisposedTiresByReason(year);
+        res.json({
+            success: true,
+            data
+        });
+    } catch (error) {
+        console.error('Error getting disposed tires by reason:', error);
+        res.status(500).json({ error: error.message });
+    }
+}
+
+/**
+ * Get disposed tires grouped by method
+ */
+static async getDisposedTiresByMethod(req, res) {
+    try {
+        const { year } = req.query;
+        const data = await Tire.getDisposedTiresByMethod(year);
+        res.json({
+            success: true,
+            data
+        });
+    } catch (error) {
+        console.error('Error getting disposed tires by method:', error);
+        res.status(500).json({ error: error.message });
+    }
+}
+
+/**
+ * Get disposed tires grouped by size
+ */
+static async getDisposedTiresBySize(req, res) {
+    try {
+        const { year } = req.query;
+        const data = await Tire.getDisposedTiresBySize(year);
+        res.json({
+            success: true,
+            data
+        });
+    } catch (error) {
+        console.error('Error getting disposed tires by size:', error);
+        res.status(500).json({ error: error.message });
+    }
+}
+
+/**
+ * Get a single disposed tire by ID with full details
+ */
+static async getDisposedTireById(req, res) {
+    try {
+        const { id } = req.params;
+        const tire = await Tire.getDisposedTireById(id);
+        
+        if (!tire) {
+            return res.status(404).json({ error: 'Disposed tire not found' });
+        }
+
+        res.json({
+            success: true,
+            data: tire
+        });
+    } catch (error) {
+        console.error('Error getting disposed tire by ID:', error);
+        res.status(500).json({ error: error.message });
+    }
+}
+
+/**
+ * Export disposed tires data
+ */
+static async exportDisposedTires(req, res) {
+    try {
+        const {
+            start_date,
+            end_date,
+            reason,
+            method
+        } = req.query;
+
+        const data = await Tire.exportDisposedTires({
+            start_date,
+            end_date,
+            reason,
+            method
+        });
+
+        res.json({
+            success: true,
+            data
+        });
+    } catch (error) {
+        console.error('Error exporting disposed tires:', error);
+        res.status(500).json({ error: error.message });
+    }
+}
+
+/**
+ * Get disposal certificate for a tire
+ */
+static async getDisposalCertificate(req, res) {
+    try {
+        const { id } = req.params;
+        const certificate = await Tire.getDisposalCertificate(id);
+        
+        if (!certificate) {
+            return res.status(404).json({ error: 'Tire not found or not disposed' });
+        }
+
+        res.json({
+            success: true,
+            data: certificate
+        });
+    } catch (error) {
+        console.error('Error getting disposal certificate:', error);
+        res.status(500).json({ error: error.message });
+    }
+}
+
+/**
+ * Get disposal history with filters
+ */
+static async getDisposalHistory(req, res) {
+    try {
+        const {
+            start_date,
+            end_date,
+            reason,
+            method,
+            limit = 20,
+            offset = 0
+        } = req.query;
+
+        const result = await Tire.getDisposalHistory({
+            start_date,
+            end_date,
+            reason,
+            method,
+            limit: parseInt(limit),
+            offset: parseInt(offset)
+        });
+
+        res.json({
+            success: true,
+            data: result.data,
+            total: result.total,
+            limit: result.limit,
+            offset: result.offset
+        });
+    } catch (error) {
+        console.error('Error getting disposal history:', error);
+        res.status(500).json({ error: error.message });
+    }
+}
+
+/**
+ * Get disposal summary statistics
+ */
+static async getDisposalSummary(req, res) {
+    try {
+        const stats = await Tire.getDisposalStats();
+        const byReason = await Tire.getDisposalSummaryByReason();
+        const byMethod = await Tire.getDisposalSummaryByMethod();
+        const monthlyTrend = await Tire.getMonthlyDisposalTrend();
+
+        res.json({
+            success: true,
+            summary: {
+                stats,
+                by_reason: byReason,
+                by_method: byMethod,
+                monthly_trend: monthlyTrend,
+                top_reasons: byReason.slice(0, 5),
+                total_disposed: stats?.disposed_count || 0,
+                total_value: stats?.total_disposed_value || 0
+            }
+        });
+    } catch (error) {
+        console.error('Error getting disposal summary:', error);
+        res.status(500).json({ error: error.message });
+    }
+}
+
+/**
+ * Get eligible tires for disposal
+ */
+static async getEligibleForDisposal(req, res) {
+    try {
+        const tires = await Tire.getEligibleForDisposal();
+        res.json({
+            success: true,
+            data: tires
+        });
+    } catch (error) {
+        console.error('Error getting eligible tires for disposal:', error);
+        res.status(500).json({ error: error.message });
+    }
+}
+
+/**
+ * Get disposal reasons
+ */
+static async getDisposalReasons(req, res) {
+    try {
+        const reasons = await Tire.getDisposalReasons();
+        res.json({
+            success: true,
+            data: reasons
+        });
+    } catch (error) {
+        console.error('Error getting disposal reasons:', error);
+        res.status(500).json({ error: error.message });
+    }
+}
+
+/**
+ * Reverse a disposal (admin only)
+ */
+static async reverseDisposal(req, res) {
+    try {
+        const { id } = req.params;
+        const { reason } = req.body;
+        const user_id = req.user.id;
+
+        const result = await Tire.reverseDisposal(id, user_id, reason);
+
+        res.json({
+            success: true,
+            message: 'Disposal reversed successfully',
+            data: result
+        });
+    } catch (error) {
+        console.error('Error reversing disposal:', error);
+        res.status(500).json({ error: error.message });
+    }
+}
+
+// Update the existing disposeTire method to use the new structure
+static async disposeTire(req, res) {
+    try {
+        const { id } = req.params; // Get ID from URL params
+        const {
+            disposal_reason,
+            disposal_method,
+            disposal_notes,
+            disposal_date
+        } = req.body;
+        const user_id = req.user.id;
+
+        const result = await Tire.dispose(id, {
+            disposal_reason,
+            disposal_method,
+            disposal_notes,
+            disposal_date,
+            user_id,
+            disposal_authorized_by: user_id
+        });
+
+        res.json({
+            success: true,
+            message: 'Tire disposed successfully',
+            data: result
+        });
+    } catch (error) {
+        console.error('Error disposing tire:', error);
+        res.status(500).json({ error: error.message });
+    }
+}
+
+// Update the bulkDispose method
+static async bulkDisposeTires(req, res) {
+    try {
+        const {
+            tire_ids,
+            disposal_reason,
+            disposal_method,
+            disposal_notes,
+            disposal_date
+        } = req.body;
+        const user_id = req.user.id;
+
+        const results = await Tire.bulkDispose(tire_ids, {
+            disposal_reason,
+            disposal_method,
+            disposal_notes,
+            disposal_date,
+            user_id,
+            disposal_authorized_by: user_id
+        });
+
+        res.json({
+            success: true,
+            message: `Successfully disposed ${results.success.length} tires${results.failed.length > 0 ? `, ${results.failed.length} failed` : ''}`,
+            results
+        });
+    } catch (error) {
+        console.error('Error bulk disposing tires:', error);
+        res.status(500).json({ error: error.message });
+    }
+}
+    
 
 }
 

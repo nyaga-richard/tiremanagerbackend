@@ -549,22 +549,51 @@ class GoodsReceivedNote {
                                                     createNextTire(0);
                                                 } else {
                                                     // For retread orders, update existing tire - CHANGED HERE
-                                                    const updateTireSql = `
-                                                        UPDATE tires 
-                                                        SET retread_count = COALESCE(retread_count, 0) + 1,
-                                                            type = 'RETREADED',  /* Set type to RETREAD */
-                                                            status = ?,
-                                                            supplier_id = ?
-                                                        WHERE id = ?`;
+                                                    let updateTireSql;
+                                                    let updateParams;
 
-                                                    // Set status to IN_STORE for accepted retreads, DISPOSED for rejected ones
-                                                    const newTireStatus = condition === 'REJECTED' ? 'DISPOSED' : 'IN_STORE';
-                                                    
-                                                    db.run(updateTireSql, [
-                                                        newTireStatus,
-                                                        order.supplier_id,
-                                                        itemDetails.tire_id
-                                                    ], function(err) {
+                                                    if (condition === 'REJECTED') {
+                                                        // Tire rejected after retreading → dispose it
+                                                        updateTireSql = `
+                                                            UPDATE tires 
+                                                            SET retread_count = COALESCE(retread_count, 0) + 1,
+                                                                type = 'RETREADED',
+                                                                status = 'DISPOSED',
+                                                                supplier_id = ?,
+                                                                disposal_date = CURRENT_TIMESTAMP,
+                                                                disposal_reason = ?,
+                                                                disposal_method = ?,
+                                                                disposal_authorized_by = ?,
+                                                                disposal_notes = ?
+                                                            WHERE id = ?`;
+
+                                                        updateParams = [
+                                                            order.supplier_id,
+                                                            'RETREAD REJECT',  // disposal_reason
+                                                            'DISPOSAL',        // disposal_method
+                                                            received_by,       // disposal_authorized_by
+                                                            itemNotes || 'Rejected during retreading', // disposal_notes
+                                                            itemDetails.tire_id
+                                                        ];
+
+                                                    } else {
+                                                        // Accepted retread → return to store
+                                                        updateTireSql = `
+                                                            UPDATE tires 
+                                                            SET retread_count = COALESCE(retread_count, 0) + 1,
+                                                                type = 'RETREADED',
+                                                                status = 'IN_STORE',
+                                                                supplier_id = ?
+                                                            WHERE id = ?`;
+
+                                                        updateParams = [
+                                                            order.supplier_id,
+                                                            itemDetails.tire_id
+                                                        ];
+                                                    }
+
+
+                                                    db.run(updateTireSql, updateParams, function(err) {
                                                         if (err) {
                                                             console.error('Error updating tire:', err);
                                                             db.run('ROLLBACK');
@@ -572,18 +601,22 @@ class GoodsReceivedNote {
                                                             return;
                                                         }
 
-                                                        // Create movement record for retread
+                                                        // Create movement record for retread result
                                                         const movementSql = `
                                                             INSERT INTO tire_movements 
                                                             (tire_id, from_location, to_location, movement_type,
                                                             reference_id, reference_type, user_id, notes)
                                                             VALUES (?, 'AT_RETREAD_SUPPLIER', ?, ?, ?, ?, ?, ?)`;
 
-                                                        // Set destination location based on condition
                                                         const toLocation = condition === 'REJECTED' ? 'DISPOSED' : 'WAREHOUSE';
-                                                        const movementType = condition === 'REJECTED' 
-                                                            ? 'STORE_TO_DISPOSAL'  
-                                                            : 'RETREAD_SUPPLIER_TO_STORE';  
+
+                                                        const movementType = condition === 'REJECTED'
+                                                            ? 'STORE_TO_DISPOSAL'
+                                                            : 'RETREAD_SUPPLIER_TO_STORE';
+
+                                                        const movementNotes = condition === 'REJECTED'
+                                                            ? (itemNotes || 'Disposed after retread rejection')
+                                                            : (itemNotes || 'Received from retreading');
 
                                                         db.run(movementSql, [
                                                             itemDetails.tire_id,
@@ -592,7 +625,7 @@ class GoodsReceivedNote {
                                                             grnId,
                                                             'GRN',
                                                             received_by,
-                                                            itemNotes || `Received from retreading`
+                                                            movementNotes
                                                         ], (err) => {
                                                             if (err) {
                                                                 console.error('Error creating movement:', err);
@@ -607,7 +640,13 @@ class GoodsReceivedNote {
                                                                 retread_order_item_id: itemId,
                                                                 brand: brand || itemDetails.tire_brand,
                                                                 condition: condition,
-                                                                type: 'RETREADED'  // Add type to processed tire info
+                                                                type: 'RETREADED',
+                                                                status: condition === 'REJECTED' ? 'DISPOSED' : 'IN_STORE',
+                                                                disposal_reason: condition === 'REJECTED' ? 'RETREAD REJECT' : null,
+                                                                disposal_date: condition === 'REJECTED' ? new Date().toISOString() : null,
+                                                                disposal_notes: condition === 'REJECTED' ? (itemNotes || 'Disposed after retread rejection') : null,
+                                                                disposal_method: condition === 'REJECTED' ? 'DISPOSAL' : null,
+                                                                disposal_authorized_by: condition === 'REJECTED' ? received_by : null
                                                             });
 
                                                             processedItems.push({

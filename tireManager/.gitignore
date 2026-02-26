@@ -3,3 +3,4 @@ database/*.db-wal
 database/*.db-shm
 node_modules/
 tireManager/node_modules/
+../node_modules/
