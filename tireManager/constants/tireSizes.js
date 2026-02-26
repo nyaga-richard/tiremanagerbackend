@@ -3,7 +3,8 @@ const TIRE_SIZES = Object.freeze([
     "315/80R22.5",
     "12R22.5",
     "11R22.5",
-    "385/65R22.5"
+    "385/65R22.5",
+    "255/70R22.5"
 ]);
 
 module.exports = {
