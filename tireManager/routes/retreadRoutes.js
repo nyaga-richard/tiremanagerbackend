@@ -521,102 +521,140 @@ router.get('/retread-orders/:id/receive', async (req, res) => {
 router.post('/retread-orders/:id/receive', async (req, res) => {
     const { received_date, notes, tires } = req.body;
     const user_id = req.body.user_id || 1;
-    
+
     if (!tires || tires.length === 0) {
         return res.status(400).json({ success: false, error: 'Tires data is required' });
     }
-    
+
     await runAsync('BEGIN TRANSACTION');
-    
+
     try {
+        // Create retread receiving record
         const receivingResult = await runAsync(
             `INSERT INTO retread_receiving 
              (retread_order_id, received_date, received_by, notes, created_at)
              VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)`,
-            [req.params.id, received_date || new Date().toISOString().split('T')[0], user_id, notes || null]
+            [
+                req.params.id,
+                received_date || new Date().toISOString().split('T')[0],
+                user_id,
+                notes || null
+            ]
         );
-        
         const receiving_id = receivingResult.lastID;
-        
+
         let receivedCount = 0;
         let rejectedCount = 0;
         let totalCost = 0;
-        
-            for (const tire of tires) {
-                const tireId = tire.tire_id || tire.id;
 
-                if (!tireId) {
-                    throw new Error("Invalid tire data: tire_id missing");
-                }
+        for (const tire of tires) {
+            const tireId = tire.tire_id || tire.id;
+            if (!tireId) throw new Error("Invalid tire data: tire_id missing");
+
+            // Insert into retread_received_items
+            await runAsync(
+                `INSERT INTO retread_received_items 
+                (receiving_id, tire_id, received_depth, quality, status, notes, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+                [
+                    receiving_id,
+                    tireId,
+                    tire.received_depth || null,
+                    tire.quality || 'GOOD',
+                    tire.status || 'RECEIVED',
+                    tire.notes || null
+                ]
+            );
+
+            // Update retread_order_items
+            await runAsync(
+                `UPDATE retread_order_items SET 
+                 status = ?, 
+                 cost = ?, 
+                 notes = ?
+                 WHERE retread_order_id = ? AND tire_id = ?`,
+                [
+                    tire.status || 'RECEIVED',
+                    tire.cost || 0,
+                    tire.notes || null,
+                    req.params.id,
+                    tireId
+                ]
+            );
+
+            if (tire.status === 'RECEIVED') {
+                receivedCount++;
+                totalCost += parseFloat(tire.cost || 0);
 
                 await runAsync(
-                    `INSERT INTO retread_received_items 
-                    (receiving_id, tire_id, received_depth, quality, status, notes, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
-                    [
-                        receiving_id,
-                        tireId,
-                        tire.received_depth || null,
-                        tire.quality || 'GOOD',
-                        tire.status || 'RECEIVED',
-                        tire.notes || null
-                    ]
+                    `UPDATE tires SET 
+                     status = 'USED_STORE', 
+                     retread_count = COALESCE(retread_count, 0) + 1,
+                     updated_at = CURRENT_TIMESTAMP
+                     WHERE id = ?`,
+                    [tireId]
                 );
 
                 await runAsync(
-                    `UPDATE retread_order_items SET 
-                    status = ?, 
-                    cost = ?, 
-                    notes = ?
-                    WHERE retread_order_id = ? AND tire_id = ?`,
+                    `INSERT INTO tire_movements 
+                     (tire_id, from_location, to_location, movement_type, user_id, notes, created_at)
+                     VALUES (?, 'AT_RETREAD_SUPPLIER', 'USED_STORE', 'RETREAD_SUPPLIER_TO_STORE', ?, ?, CURRENT_TIMESTAMP)`,
+                    [tireId, user_id, notes || 'Returned from retreading']
+                );
+
+            } else if (tire.status === 'REJECTED') {
+                rejectedCount++;
+
+                console.log("BEFORE DISPOSAL UPDATE:", await runAsync(`SELECT * FROM tires WHERE id = ?`, [tireId]));
+
+                await runAsync(
+                    `UPDATE tires SET
+                     status = 'DISPOSED',
+                     type = 'RETREADED',
+                     retread_count = COALESCE(retread_count, 0) + 1,
+                     disposal_date = date('now'),
+                     disposal_reason = 'RETREAD REJECT',
+                     disposal_method = 'DISPOSAL',
+                     disposal_authorized_by = ?,
+                     disposal_notes = ?,
+                     updated_at = CURRENT_TIMESTAMP
+                     WHERE id = ?`,
                     [
-                        tire.status || 'RECEIVED',
-                        tire.cost || 0,
-                        tire.notes || null,
-                        req.params.id,
+                        user_id,
+                        tire.notes || 'Rejected during retread receiving',
                         tireId
                     ]
                 );
 
-                if (tire.status === 'RECEIVED') {
-                    receivedCount++;
-                    totalCost += parseFloat(tire.cost || 0);
+                console.log("AFTER DISPOSAL UPDATE:", await runAsync(`SELECT * FROM tires WHERE id = ?`, [tireId]));
 
-                    await runAsync(
-                        `UPDATE tires SET 
-                        status = 'USED_STORE', 
-                        retread_count = COALESCE(retread_count, 0) + 1
-                        WHERE id = ?`,
-                        [tireId]
-                    );
-
-                    await runAsync(
-                        `INSERT INTO tire_movements 
-                        (tire_id, from_location, to_location, movement_type, user_id, notes, created_at)
-                        VALUES (?, 'AT_RETREAD_SUPPLIER', 'USED_STORE', 'RETREAD_SUPPLIER_TO_STORE', ?, ?, CURRENT_TIMESTAMP)`,
-                        [tireId, user_id, notes || 'Returned from retreading']
-                    );
-                } 
-                else if (tire.status === 'REJECTED') {
-                    rejectedCount++;
-
-                    await runAsync(
-                        `UPDATE tires SET status = 'DISPOSED' WHERE id = ?`,
-                        [tireId]
-                    );
-
-                    await runAsync(
-                        `INSERT INTO tire_movements 
-                        (tire_id, from_location, to_location, movement_type, user_id, notes, created_at)
-                        VALUES (?, 'AT_RETREAD_SUPPLIER', 'DISPOSED', 'RETREAD_SUPPLIER_TO_STORE', ?, ?, CURRENT_TIMESTAMP)`,
-                        [tireId, user_id, notes || 'Rejected during retread receiving']
-                    );
-                }
+                await runAsync(
+                    `INSERT INTO tire_movements 
+                     (tire_id, from_location, to_location, movement_type, user_id, notes, created_at)
+                     VALUES (?, 'AT_RETREAD_SUPPLIER', 'DISPOSED', 'STORE_TO_DISPOSAL', ?, ?, CURRENT_TIMESTAMP)`,
+                    [tireId, user_id, tire.notes || 'Rejected during retread receiving']
+                );
             }
-        
-        const newStatus = rejectedCount === 0 ? 'RECEIVED' : 
-                         receivedCount > 0 ? 'PARTIALLY_RECEIVED' : 'COMPLETED';
-        
+        }
+
+        // Determine new status
+        let newStatus;
+        if (rejectedCount === 0 && receivedCount > 0) newStatus = 'RECEIVED';
+        else if (rejectedCount > 0 && receivedCount > 0) newStatus = 'PARTIALLY_RECEIVED';
+        else newStatus = 'COMPLETED';
+
+        // Check if any tires remain pending
+        const pendingResult = await runAsync(
+            `SELECT COUNT(*) as count 
+             FROM retread_order_items 
+             WHERE retread_order_id = ? AND status NOT IN ('RECEIVED','REJECTED')`,
+            [req.params.id]
+        );
+
+        const pendingCount = pendingResult && pendingResult.count != null ? pendingResult.count : 0;
+        if (pendingCount === 0) newStatus = 'COMPLETED';
+
+        // Update retread_orders
         await runAsync(
             `UPDATE retread_orders 
              SET status = ?, 
@@ -625,7 +663,8 @@ router.post('/retread-orders/:id/receive', async (req, res) => {
              WHERE id = ?`,
             [newStatus, received_date || new Date().toISOString().split('T')[0], totalCost, req.params.id]
         );
-        
+
+        // Add timeline entry
         await runAsync(
             `INSERT INTO retread_timeline (retread_order_id, status, note, user_id, created_at)
              VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)`,
@@ -636,19 +675,20 @@ router.post('/retread-orders/:id/receive', async (req, res) => {
                 user_id
             ]
         );
-        
+
+        // Debug logs for all rejected tires
+        for (const tire of tires.filter(t => t.status === 'REJECTED')) {
+            console.log("FINAL TIRE STATE BEFORE COMMIT:", await runAsync(`SELECT * FROM tires WHERE id = ?`, [tire.tire_id || tire.id]));
+        }
+
         await runAsync('COMMIT');
-        
+
         res.json({ 
             success: true, 
             message: `Successfully received ${receivedCount} tires${rejectedCount > 0 ? `, ${rejectedCount} rejected` : ''}`,
-            data: { 
-                receivedCount, 
-                rejectedCount, 
-                newStatus,
-                totalCost
-            }
+            data: { receivedCount, rejectedCount, newStatus, totalCost }
         });
+
     } catch (error) {
         await runAsync('ROLLBACK');
         console.error('Error receiving order:', error);

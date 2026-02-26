@@ -641,12 +641,7 @@ class GoodsReceivedNote {
                                                                 brand: brand || itemDetails.tire_brand,
                                                                 condition: condition,
                                                                 type: 'RETREADED',
-                                                                status: condition === 'REJECTED' ? 'DISPOSED' : 'IN_STORE',
-                                                                disposal_reason: condition === 'REJECTED' ? 'RETREAD REJECT' : null,
-                                                                disposal_date: condition === 'REJECTED' ? new Date().toISOString() : null,
-                                                                disposal_notes: condition === 'REJECTED' ? (itemNotes || 'Disposed after retread rejection') : null,
-                                                                disposal_method: condition === 'REJECTED' ? 'DISPOSAL' : null,
-                                                                disposal_authorized_by: condition === 'REJECTED' ? received_by : null
+                                                                status: condition === 'REJECTED' ? 'DISPOSED' : 'IN_STORE'
                                                             });
 
                                                             processedItems.push({
