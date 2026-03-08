@@ -4,7 +4,7 @@ const { getAllPermissions, DEFAULT_ROLE_PERMISSIONS, SYSTEM_ROLES } = require('.
 const bcrypt = require('bcrypt'); // You'll need to install this: npm install bcrypt
 
 // Create database connection
-const dbPath = path.join(__dirname, '..', 'database', 'tires.db');
+const dbPath = path.join(__dirname, '..','..','..','..','..','..', 'data','tiremanager', 'tires.db');
 // Ensure database directory exists
 const fs = require('fs');
 const dbDir = path.dirname(dbPath);
@@ -667,6 +667,40 @@ async function createTables() {
     }
 }
 
+async function addMissingColumns() {
+    console.log('\nChecking for missing columns...');
+    
+    // List of columns to add if they don't exist
+    const columnUpdates = [
+        // Note: We removed most columns since they're now included in CREATE TABLE statements
+       // { table: 'grn_items', column: 'brand', definition: 'TEXT' },   
+       {table:'vehicles', column: 'retired_date', definition: 'DATE'},
+         {table:'vehicles', column: 'retirement_reason', definition: 'TEXT'},
+        {table:'vehicles', column: 'retired_by', definition: 'INTEGER'},
+            {table:'vehicles', column: 'updated_at', definition: 'TIMESTAMP '},
+
+
+    ];
+    
+    for (const update of columnUpdates) {
+        try {
+            // Check if column exists
+            const tableInfo = await allQuery(`PRAGMA table_info(${update.table})`);
+            const columnExists = tableInfo.some(col => col.name === update.column);
+            
+            if (!columnExists) {
+                console.log(`Adding column ${update.column} to ${update.table} table...`);
+                await runQuery(`ALTER TABLE ${update.table} ADD COLUMN ${update.column} ${update.definition}`);
+                console.log(`✓ Added column ${update.column} to ${update.table}`);
+            } else {
+                console.log(`✓ Column ${update.column} already exists in ${update.table}`);
+            }
+        } catch (error) {
+            console.error(`Error checking/adding column ${update.column} to ${update.table}:`, error.message);
+        }
+    }
+}
+
 // Create indexes for performance
 async function createIndexes() {
     console.log('\n📊 Creating indexes...');
@@ -921,6 +955,8 @@ async function createViews() {
         }
     }
 }
+
+
 
 // Initialize chart of accounts
 async function initializeChartOfAccounts() {
@@ -1181,6 +1217,9 @@ async function initializeDatabase() {
         
         // Create all tables
         await createTables();
+
+        // Add missing columns to existing tables
+        await addMissingColumns();
         
         // Create indexes
         await createIndexes();

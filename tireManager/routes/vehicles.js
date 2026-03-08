@@ -313,29 +313,29 @@ router.post('/:id/retire',
             });
             
             // 4. Log vehicle retirement
-            await new Promise((resolve, reject) => {
-                db.run(
-                    `INSERT INTO vehicle_history 
-                     (vehicle_id, action, details, user_id, created_at)
-                     VALUES (?, ?, ?, ?, ?)`,
-                    [
-                        vehicleId,
-                        'RETIRED',
-                        JSON.stringify({
-                            reason: reason || 'Vehicle retired',
-                            retirement_date: retirement_date || new Date().toISOString().split('T')[0],
-                            odometer_at_retirement: vehicle.current_odometer,
-                            tires_removed: currentAssignments ? currentAssignments.length : 0
-                        }),
-                        retired_by || 1,
-                        new Date().toISOString()
-                    ],
-                    function(err) {
-                        if (err) reject(err);
-                        else resolve(this.lastID);
-                    }
-                );
-            });
+            // await new Promise((resolve, reject) => {
+            //     db.run(
+            //         `INSERT INTO vehicle_history 
+            //          (vehicle_id, action, details, user_id, created_at)
+            //          VALUES (?, ?, ?, ?, ?)`,
+            //         [
+            //             vehicleId,
+            //             'RETIRED',
+            //             JSON.stringify({
+            //                 reason: reason || 'Vehicle retired',
+            //                 retirement_date: retirement_date || new Date().toISOString().split('T')[0],
+            //                 odometer_at_retirement: vehicle.current_odometer,
+            //                 tires_removed: currentAssignments ? currentAssignments.length : 0
+            //             }),
+            //             retired_by || 1,
+            //             new Date().toISOString()
+            //         ],
+            //         function(err) {
+            //             if (err) reject(err);
+            //             else resolve(this.lastID);
+            //         }
+            //     );
+            // });
             
             // Commit transaction
             await new Promise((resolve, reject) => {
@@ -409,27 +409,27 @@ router.post('/:id/reactivate',
             );
         });
         
-        // Log vehicle reactivation
-        await new Promise((resolve, reject) => {
-            db.run(
-                `INSERT INTO vehicle_history 
-                 (vehicle_id, action, details, user_id, created_at)
-                 VALUES (?, ?, ?, ?, ?)`,
-                [
-                    vehicleId,
-                    'REACTIVATED',
-                    JSON.stringify({
-                        reason: reason || 'Vehicle reactivated'
-                    }),
-                    reactivated_by || 1,
-                    new Date().toISOString()
-                ],
-                function(err) {
-                    if (err) reject(err);
-                    else resolve(this.lastID);
-                }
-            );
-        });
+        // // Log vehicle reactivation
+        // await new Promise((resolve, reject) => {
+        //     db.run(
+        //         `INSERT INTO vehicle_history 
+        //          (vehicle_id, action, details, user_id, created_at)
+        //          VALUES (?, ?, ?, ?, ?)`,
+        //         [
+        //             vehicleId,
+        //             'REACTIVATED',
+        //             JSON.stringify({
+        //                 reason: reason || 'Vehicle reactivated'
+        //             }),
+        //             reactivated_by || 1,
+        //             new Date().toISOString()
+        //         ],
+        //         function(err) {
+        //             if (err) reject(err);
+        //             else resolve(this.lastID);
+        //         }
+        //     );
+        // });
         
         // Get updated vehicle info
         const reactivatedVehicle = await Vehicle.getVehicleWithPositions(vehicleId);
