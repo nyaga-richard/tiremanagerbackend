@@ -111,7 +111,7 @@ router.get('/:id',
 
 // Update vehicle details
 router.put('/:id',
-    checkPermission('vehicle.update'),
+    checkPermission('vehicle.edit'),
      async (req, res) => {
     try {
         const {
@@ -167,7 +167,7 @@ router.put('/:id',
 
 // Update vehicle odometer
 router.patch('/:id/odometer',
-    checkPermission('vehicle.update'),
+    checkPermission('vehicle.edit'),
      async (req, res) => {
     try {
         const { current_odometer } = req.body;
@@ -193,7 +193,7 @@ router.patch('/:id/odometer',
 
 // Retire a vehicle
 router.post('/:id/retire',
-    checkPermission('vehicle.update'),
+    checkPermission('vehicle.edit'),
      async (req, res) => {
     try {
         const vehicleId = req.params.id;
@@ -373,7 +373,7 @@ router.post('/:id/retire',
 
 // Reactivate a retired vehicle
 router.post('/:id/reactivate',
-    checkPermission('vehicle.update'),    
+    checkPermission('vehicle.edit'),    
     async (req, res) => {
     try {
         const vehicleId = req.params.id;
