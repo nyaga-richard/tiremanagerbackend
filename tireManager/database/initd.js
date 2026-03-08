@@ -4,7 +4,7 @@ const { getAllPermissions, DEFAULT_ROLE_PERMISSIONS, SYSTEM_ROLES } = require('.
 const bcrypt = require('bcrypt'); // You'll need to install this: npm install bcrypt
 
 // Create database connection
-const dbPath = path.join(__dirname, '..','..','..','..','..','..', 'data','tiremanager', 'tires.db');
+const dbPath = path.join(__dirname, '..','..','..','..','..', 'data','tiremanager', 'tires.db');
 // Ensure database directory exists
 const fs = require('fs');
 const dbDir = path.dirname(dbPath);
